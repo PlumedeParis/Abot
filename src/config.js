@@ -51,7 +51,10 @@ const DEFAULTS = {
       '^<(?<username>[A-Za-z0-9_]{1,16})> (?<message>.+)$',
       '^(?<username>[A-Za-z0-9_]{1,16}) whispers(?: to you)?: (?<message>.+)$',
       '^\\[(?<username>[A-Za-z0-9_]{1,16}) -> (?:me|you)\\] (?<message>.+)$',
-      '^From (?<username>[A-Za-z0-9_]{1,16}): (?<message>.+)$'
+      '^From (?<username>[A-Za-z0-9_]{1,16}): (?<message>.+)$',
+      '^(?<username>[A-Za-z0-9_]{1,16}) -> (?:me|you): (?<message>.+)$',
+      // Plugin chat formats such as "[VIP] Name: msg" or "Name » msg" (keep last).
+      '^(?:\\[[^\\]]{1,32}\\] ?)*(?<username>[A-Za-z0-9_]{1,16}) ?(?:»|>>|:) (?<message>.+)$'
     ]
   },
   limits: {
@@ -77,6 +80,10 @@ const DEFAULTS = {
     confirmationTimeoutSeconds: 60
   },
   navigation: {
+    // With autoDetect, an unset home is read from where the bot stands, and
+    // the kit chests are found to its left, right and behind (src/station.js).
+    autoDetect: true,
+    scanDistance: 6,
     home: null,
     returnHomeAfterDelivery: true,
     allowDigging: false,
@@ -98,7 +105,11 @@ const DEFAULTS = {
     pickupTimeoutMs: 15000,
     returnUndelivered: true
   },
-  kits: {},
+  kits: {
+    totem: { direction: 'left', distance: null, standAt: null, retrieval: { method: 'chest', container: null, items: [{ nameRegex: 'shulker_box$', count: 1 }] } },
+    pvp: { direction: 'right', distance: null, standAt: null, retrieval: { method: 'chest', container: null, items: [{ nameRegex: 'shulker_box$', count: 1 }] } },
+    grief: { direction: 'backward', distance: null, standAt: null, retrieval: { method: 'chest', container: null, items: [{ nameRegex: 'shulker_box$', count: 1 }] } }
+  },
   logging: {
     retentionDays: 30,
     consoleLevel: 'INFO'
@@ -127,7 +138,9 @@ function readSettingsSource(env) {
   }
   const file = path.resolve(ROOT, env.KITBOT_CONFIG || 'config.json');
   if (!fs.existsSync(file)) {
-    throw new Error(`Configuration file not found: ${file}. Copy config.example.json to config.json or set KITBOT_CONFIG_JSON.`);
+    // An explicitly named file must exist; otherwise run on the built-in defaults.
+    if (env.KITBOT_CONFIG) throw new Error(`Configuration file not found: ${file}`);
+    return { source: 'built-in defaults', json: {} };
   }
   return { source: file, json: JSON.parse(fs.readFileSync(file, 'utf8')) };
 }
@@ -177,6 +190,8 @@ function checkRegex(errors, where, pattern) {
 // coordinates are accepted so config.example.json can be checked in CI.
 function validateSettings(s, { allowPlaceholders = false } = {}) {
   const errors = [];
+  // Coordinates left unset are filled in at runtime by station auto-detection.
+  if (s.navigation.autoDetect && s.navigation.home === null) allowPlaceholders = true;
   const needPos = (where, v) => {
     const placeholder = v === null || v === undefined || (isPlainObject(v) && v.x === null && v.y === null && v.z === null);
     if (placeholder) {
@@ -242,7 +257,7 @@ function validateSettings(s, { allowPlaceholders = false } = {}) {
     if (!DIRECTIONS.includes(kit.direction)) errors.push(`${w}.direction: must be one of ${DIRECTIONS.join(', ')}`);
     if (kit.standAt === null || kit.standAt === undefined) {
       if (!isNum(kit.distance) || kit.distance <= 0) {
-        errors.push(`${w}: set either "standAt" coordinates or a positive "distance" from navigation.home`);
+        if (!allowPlaceholders) errors.push(`${w}: set either "standAt" coordinates or a positive "distance" from navigation.home`);
       } else if (home === null && !allowPlaceholders) {
         errors.push(`${w}: "distance" requires navigation.home to be set`);
       }
@@ -272,7 +287,7 @@ function validateSettings(s, { allowPlaceholders = false } = {}) {
 
     const d = resolveDelivery(s, name);
     if (!DELIVERY_METHODS.includes(d.method)) errors.push(`${w}.delivery.method: must be one of ${DELIVERY_METHODS.join(', ')}`);
-    if (d.method === 'drop') needPos(`${w}.delivery.dropoff`, d.dropoff);
+    if (d.method === 'drop' && d.dropoff !== null) needPos(`${w}.delivery.dropoff`, d.dropoff);
     if (d.method === 'teleport' && (!Array.isArray(d.commands) || d.commands.length === 0) && !d.acceptRequest) {
       errors.push(`${w}.delivery: the "teleport" method needs "commands" (e.g. ["/tpa {player}"]) or "acceptRequest"`);
     }
@@ -287,9 +302,12 @@ function validateSettings(s, { allowPlaceholders = false } = {}) {
   return errors;
 }
 
+// A missing drop-off point defaults to the bot's home spot.
 function resolveDelivery(settings, kitName) {
   const kit = settings.kits[kitName] || {};
-  return deepMerge(settings.delivery, kit.delivery || {});
+  const d = deepMerge(settings.delivery, kit.delivery || {});
+  if (!d.dropoff && settings.navigation.home) d.dropoff = { x: settings.navigation.home.x, y: settings.navigation.home.y, z: settings.navigation.home.z };
+  return d;
 }
 
 function validateSecrets(secrets, role) {
@@ -302,15 +320,14 @@ function validateSecrets(secrets, role) {
     if (!['offline', 'microsoft'].includes(secrets.minecraft.auth)) errors.push('MINECRAFT_AUTH must be "offline" or "microsoft"');
     if (!Number.isInteger(secrets.minecraft.port) || secrets.minecraft.port <= 0) errors.push('MINECRAFT_PORT must be a port number');
   }
+  // Server, log channel and admins are optional: src/discord-setup.js finds
+  // the server, creates #kitbot-logs and uses the server owner as admin.
   if (needsDiscord) {
     if (!secrets.discord.token) errors.push('DISCORD_TOKEN is required');
-    if (!/^\d{15,22}$/.test(secrets.discord.guildId)) errors.push('DISCORD_GUILD_ID must be a Discord server ID');
+    if (secrets.discord.guildId && !/^\d{15,22}$/.test(secrets.discord.guildId)) errors.push('DISCORD_GUILD_ID must be a Discord server ID');
   }
-  if (role === 'all' || role === 'discord') {
-    if (!/^\d{15,22}$/.test(secrets.discord.logChannelId)) errors.push('DISCORD_LOG_CHANNEL_ID must be a channel ID');
-    if (secrets.discord.adminIds.length === 0) errors.push('DISCORD_ADMIN_IDS must list at least one Discord user ID');
-    for (const id of secrets.discord.adminIds) if (!/^\d{15,22}$/.test(id)) errors.push(`DISCORD_ADMIN_IDS contains an invalid ID: ${id}`);
-  }
+  if (secrets.discord.logChannelId && !/^\d{15,22}$/.test(secrets.discord.logChannelId)) errors.push('DISCORD_LOG_CHANNEL_ID must be a channel ID');
+  for (const id of secrets.discord.adminIds) if (!/^\d{15,22}$/.test(id)) errors.push(`DISCORD_ADMIN_IDS contains an invalid ID: ${id}`);
   return errors;
 }
 
@@ -331,6 +348,8 @@ function secretValues(secrets) {
 function loadSettings(env = process.env, opts = {}) {
   const { source, json } = readSettingsSource(env);
   const settings = deepMerge(DEFAULTS, json);
+  // Set by the "Run KitBot" workflow checkbox confirming the server rules.
+  if (String(env.KITBOT_BOTS_ALLOWED || '').toLowerCase() === 'true') settings.server.botsAllowedConfirmed = true;
   const errors = validateSettings(settings, opts);
   return { settings, errors, source };
 }

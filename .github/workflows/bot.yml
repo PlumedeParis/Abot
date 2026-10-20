@@ -1,18 +1,31 @@
-name: Run KitBot (bounded session)
+name: Run KitBot
 
-# Starts the bot for ONE bounded session, started by hand. GitHub-hosted
-# runners are temporary and jobs are limited to 6 hours, so this workflow is
-# for testing and short supervised sessions, not 24/7 hosting. It never
-# re-triggers itself. For 24/7 operation use a permanent host (see README) or
-# a self-hosted runner on a machine you control.
+# Runs the bot for ONE session, started by hand from the Actions tab.
+# GitHub-hosted jobs stop after at most 6 hours, so this is not 24/7 hosting,
+# and the workflow never re-triggers itself. Run it again to start a new
+# session, or use a permanent host for 24/7 (see README).
+#
+# Only one secret is required: DISCORD_TOKEN. Everything else has a default:
+#   - Minecraft: 1b1t.cc, account VoidClanKitBot (override with secrets
+#     MINECRAFT_HOST / MINECRAFT_USERNAME / MINECRAFT_PASSWORD ...)
+#   - Discord server, #kitbot-logs channel and admin (server owner) are found
+#     or created automatically (override with DISCORD_GUILD_ID / ...)
+#   - Kit chests are found around the bot when it logs in (src/station.js)
+#   - Storage: SQLite kept between runs in the GitHub Actions cache, unless
+#     DATABASE_URL (PostgreSQL) is set
 
 on:
   workflow_dispatch:
     inputs:
-      duration_minutes:
-        description: "How long to run (minutes, max 340)"
+      confirm_rules:
+        description: "I have read the 1b1t.cc rules and automated bots are allowed"
+        type: boolean
         required: true
-        default: "120"
+        default: false
+      duration_minutes:
+        description: "How long to run, in minutes (max 340)"
+        required: true
+        default: "340"
       role:
         description: "Which part to run"
         required: true
@@ -20,7 +33,7 @@ on:
         type: choice
         options: [all, minecraft, discord]
       runner:
-        description: "Runner label (ubuntu-latest or self-hosted)"
+        description: "Runner label (ubuntu-latest, or self-hosted for your own machine)"
         required: true
         default: ubuntu-latest
 
@@ -35,23 +48,41 @@ concurrency:
 jobs:
   run:
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 350
+    timeout-minutes: 355
     env:
-      MINECRAFT_HOST: ${{ secrets.MINECRAFT_HOST }}
-      MINECRAFT_PORT: ${{ secrets.MINECRAFT_PORT }}
-      MINECRAFT_USERNAME: ${{ secrets.MINECRAFT_USERNAME }}
-      MINECRAFT_AUTH: ${{ secrets.MINECRAFT_AUTH }}
-      MINECRAFT_PASSWORD: ${{ secrets.MINECRAFT_PASSWORD }}
+      MINECRAFT_HOST: ${{ secrets.MINECRAFT_HOST || '1b1t.cc' }}
+      MINECRAFT_PORT: ${{ secrets.MINECRAFT_PORT || '25565' }}
+      MINECRAFT_USERNAME: ${{ secrets.MINECRAFT_USERNAME || 'VoidClanKitBot' }}
+      MINECRAFT_AUTH: ${{ secrets.MINECRAFT_AUTH || 'offline' }}
+      # The account owner chose to keep this password in the workflow; a
+      # MINECRAFT_PASSWORD secret replaces it.
+      MINECRAFT_PASSWORD: ${{ secrets.MINECRAFT_PASSWORD || 'Plume2' }}
+      MINECRAFT_VERSION: ${{ secrets.MINECRAFT_VERSION || '1.21.11' }}
       DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
       DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
       DISCORD_LOG_CHANNEL_ID: ${{ secrets.DISCORD_LOG_CHANNEL_ID }}
       DISCORD_ADMIN_IDS: ${{ secrets.DISCORD_ADMIN_IDS }}
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       KITBOT_CONFIG_JSON: ${{ secrets.KITBOT_CONFIG_JSON }}
+      SQLITE_PATH: data/kitbot.db
+      KITBOT_BOTS_ALLOWED: ${{ inputs.confirm_rules }}
       KITBOT_RUN_MINUTES: ${{ inputs.duration_minutes }}
       KITBOT_ROLE_INPUT: ${{ inputs.role }}
-      RUNNER_LABEL: ${{ inputs.runner }}
     steps:
+      - name: Check prerequisites
+        shell: bash
+        run: |
+          ok=1
+          if [ "$KITBOT_BOTS_ALLOWED" != "true" ]; then
+            echo "::error::Tick the box confirming the 1b1t.cc rules allow bots when you click 'Run workflow'."
+            ok=0
+          fi
+          if [ -z "$DISCORD_TOKEN" ]; then
+            echo "::error::Add the DISCORD_TOKEN secret: repository Settings > Secrets and variables > Actions > New repository secret."
+            ok=0
+          fi
+          [ $ok = 1 ]
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
@@ -62,25 +93,29 @@ jobs:
       - name: Install dependencies
         run: npm ci --omit=dev
 
-      - name: Check required secrets
-        shell: bash
-        run: |
-          missing=0
-          for name in MINECRAFT_HOST MINECRAFT_USERNAME DISCORD_TOKEN DISCORD_GUILD_ID DISCORD_LOG_CHANNEL_ID DISCORD_ADMIN_IDS KITBOT_CONFIG_JSON; do
-            if [ -z "${!name}" ]; then echo "::error::Secret $name is not set"; missing=1; fi
-          done
-          if [ "$RUNNER_LABEL" != "self-hosted" ] && [ -z "$DATABASE_URL" ]; then
-            echo "::error::DATABASE_URL is required on GitHub-hosted runners: their disk is wiped after the job, so SQLite would lose cooldowns, quotas and links."
-            missing=1
-          fi
-          exit $missing
+      # Without DATABASE_URL, the SQLite database (links, cooldowns, quotas,
+      # queue, kit station) is carried from one run to the next in the cache.
+      - name: Restore saved data
+        if: env.DATABASE_URL == ''
+        uses: actions/cache/restore@v4
+        with:
+          path: data
+          key: kitbot-db-${{ github.run_id }}
+          restore-keys: kitbot-db-
 
       - name: Validate settings
         run: node scripts/validate-config.js
 
-      - name: Run the bot (supervised, bounded)
+      - name: Run the bot
         shell: bash
         run: node scripts/supervise.js "$KITBOT_ROLE_INPUT" 2>&1 | tee kitbot.log
+
+      - name: Save data for the next run
+        if: always() && env.DATABASE_URL == ''
+        uses: actions/cache/save@v4
+        with:
+          path: data
+          key: kitbot-db-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Upload log
         if: always()
@@ -88,4 +123,5 @@ jobs:
         with:
           name: kitbot-log-${{ github.run_id }}
           path: kitbot.log
-          retention-days: 7
+          retention-days: 3
+          if-no-files-found: ignore

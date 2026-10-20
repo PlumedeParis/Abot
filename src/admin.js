@@ -25,6 +25,7 @@ const HELP = [
   ['/kitbot cooldown-reset <player>', 'Reset a player cooldown (confirmation)'],
   ['/kitbot quota-reset <player>', 'Reset a player quota (confirmation)'],
   ['/kitbot reload', 'Reload non-secret settings'],
+  ['/kitbot recalibrate', 'Re-detect the kit chests around the bot'],
   ['/kitbot logs', 'Recent events'],
   ['/kitbot help', 'This list']
 ];
@@ -168,6 +169,11 @@ function createAdminActions({ db, logger, getSettings, onReload = () => {} }) {
       await setSetting(db, 'reload_requested_at', Date.now());
       await audit(admin, 'reload', `from ${source.startsWith('/') ? 'config file' : source}`);
       return { ok: true };
+    },
+    async recalibrate(admin) {
+      await setSetting(db, 'station_recalibrate_at', Date.now());
+      await audit(admin, 'recalibrate');
+      return true;
     },
     logs: () => recentEvents(db, 15),
     help: () => HELP

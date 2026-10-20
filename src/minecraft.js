@@ -5,13 +5,15 @@
 // delivery worker.
 
 const mineflayer = require('mineflayer');
+const { Vec3 } = require('vec3');
 const { pathfinder } = require('mineflayer-pathfinder');
 const { getSetting, setSetting, setStatus } = require('./database');
 const { loadSettings } = require('./config');
-const { createRequestHandler, compilePatterns, parseChatLine } = require('./requests');
+const { createRequestHandler, compilePatterns, parseChatLine, parseSignedChat } = require('./requests');
 const { createQueue, recoverInterrupted } = require('./queue');
 const { createKitService } = require('./kits');
 const linking = require('./linking');
+const { detectStation, applyStation, describeStation } = require('./station');
 
 const MC_MAX_CHAT = 256;
 
@@ -30,9 +32,14 @@ function fill(template, values) {
 function createMinecraftBot({ config, db, logger, checkMembership, onSettingsReloaded = () => {} }) {
   const { secrets } = config;
   let settings = config.settings;
+  let baseSettings = config.settings; // settings before the detected station is applied
   const getSettings = () => settings;
 
-  const runtime = { paused: false, maintenance: false, minecraftReady: false, connected: false };
+  const runtime = { paused: false, maintenance: false, minecraftReady: false, connected: false, stationReady: !!settings.navigation.home };
+  let station = null; // auto-detected kit station (see src/station.js)
+  let lastRecalibrateAt = null;
+  let lastStationError = null;
+  let lastStationAttempt = 0;
   let bot = null;
   let stopping = false;
   let reconnectTimer = null;
@@ -106,7 +113,7 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
     db,
     getSettings,
     logger,
-    canRun: () => runtime.minecraftReady && !runtime.paused && !runtime.maintenance && !stopping,
+    canRun: () => runtime.minecraftReady && runtime.stationReady && !runtime.paused && !runtime.maintenance && !stopping,
     verify: async (req) => {
       const link = await linking.getActiveLinkByUsername(db, req.mc_username);
       if (!link || link.discord_id !== req.discord_id) return { ok: false, reason: 'account link no longer active' };
@@ -245,7 +252,8 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
         await new Promise((r) => setTimeout(r, settings.auth.postLoginDelayMs));
         for (const cmd of settings.auth.postLoginCommands) await sendCommand(cmd);
         runtime.minecraftReady = true;
-        await logger.info('minecraft.ready', 'Logged in and ready to deliver kits.');
+        await ensureStation();
+        await logger.info('minecraft.ready', runtime.stationReady ? 'Logged in and ready to deliver kits.' : 'Logged in, but kit deliveries are disabled until the kit station is found.');
         stableTimer = setTimeout(() => (reconnectAttempt = 0), 60000);
         queue.poke();
       } catch (e) {
@@ -254,7 +262,7 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
       }
     });
 
-    current.on('messagestr', (line, position) => {
+    current.on('messagestr', (line, position, msg, sender) => {
       if (position === 'game_info') return; // action bar
       logger.debug('chat.line', line); // console only, with logging.consoleLevel = "DEBUG"
       for (const fn of [...chatLineListeners]) {
@@ -265,7 +273,10 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
         }
       }
       if (!runtime.minecraftReady) return;
-      const parsed = parseChatLine(line, chatPatterns);
+      // Signed player chat carries the sender's UUID: use it when the player is known,
+      // whatever the server's chat format looks like.
+      const signer = position === 'chat' && sender ? Object.values(current.players).find((p) => p.uuid === sender) : null;
+      const parsed = (signer && parseSignedChat(line, signer.username)) || parseChatLine(line, chatPatterns);
       if (!parsed || parsed.username === current.username) return;
       handleChat(parsed.username, parsed.message).catch((e) => logger.error('request.error', `Error handling a command from ${parsed.username}: ${e.message}`));
     });
@@ -296,6 +307,17 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
 
   // ---- shared state refresh (pause / maintenance / reload from Discord) ----
   async function refreshRuntime() {
+    const recalibrateAt = await getSetting(db, 'station_recalibrate_at', null);
+    if (lastRecalibrateAt === null) lastRecalibrateAt = recalibrateAt;
+    else if (recalibrateAt !== lastRecalibrateAt && runtime.minecraftReady && !queue.current()) {
+      lastRecalibrateAt = recalibrateAt;
+      await logger.admin('station.recalibrate', 'Re-detecting the kit station from the bot position.');
+      await ensureStation({ force: true });
+    }
+    // Retry every 2 minutes while the station is missing (e.g. chests being placed).
+    if (!runtime.stationReady && runtime.minecraftReady && !queue.current() && Date.now() - lastStationAttempt > 120000) {
+      await ensureStation({ force: true });
+    }
     runtime.paused = !!(await getSetting(db, 'paused', false));
     runtime.maintenance = !!(await getSetting(db, 'maintenance', false));
     const reloadAt = await getSetting(db, 'reload_requested_at', null);
@@ -305,7 +327,8 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
       try {
         const { settings: next, errors } = loadSettings();
         if (errors.length) throw new Error(errors.join('; '));
-        settings = next;
+        baseSettings = next;
+        settings = station ? applyStation(next, station) : next;
         chatPatterns = compilePatterns(settings.chat.patterns);
         onSettingsReloaded(settings);
         await logger.admin('config.reloaded', 'Minecraft bot reloaded its settings.');
@@ -313,6 +336,62 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
         await logger.error('config.reload_failed', `Settings reload failed, keeping the previous settings: ${e.message}`);
       }
     }
+  }
+
+  // ---- kit station ------------------------------------------------------------
+  async function waitUntilSettled(b) {
+    await Promise.race([b.waitForChunksToLoad().catch(() => {}), new Promise((r) => setTimeout(r, 15000))]);
+    // Wait until the server has finished moving the bot (login teleports).
+    let last = b.entity.position.clone();
+    for (let i = 0; i < 10; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      if (b.entity.position.distanceTo(last) < 0.01) return;
+      last = b.entity.position.clone();
+    }
+  }
+
+  async function ensureStation({ force = false } = {}) {
+    if (settings.navigation.home && !station) {
+      runtime.stationReady = true; // configured explicitly
+      return;
+    }
+    if (!settings.navigation.autoDetect) return;
+    if (!force) {
+      const stored = await getSetting(db, 'station', null);
+      if (stored) {
+        station = stored;
+        settings = applyStation(settings, station);
+        runtime.stationReady = true;
+        return;
+      }
+    }
+    const b = bot;
+    if (!b || !runtime.minecraftReady) return;
+    lastStationAttempt = Date.now();
+    await waitUntilSettled(b);
+    const result = detectStation({
+      position: b.entity.position,
+      yaw: b.entity.yaw,
+      blockAt: (p) => b.blockAt(new Vec3(p.x, p.y, p.z)),
+      kits: settings.kits,
+      scanDistance: settings.navigation.scanDistance
+    });
+    if (!result.ok) {
+      runtime.stationReady = false;
+      const msg = `Kit station not found: no chest for ${result.missing.join(', ')}. Log in as the bot account, stand on the home block facing the right way with the totem chest to the LEFT, pvp chest to the RIGHT and grief chest BEHIND (within ${settings.navigation.scanDistance} blocks), log out, then run /kitbot recalibrate.`;
+      if (msg !== lastStationError) await logger.error('station.missing', msg);
+      lastStationError = msg;
+      return;
+    }
+    // Detection starts from the configured settings, not from an older station.
+    station = { home: result.home, kits: result.kits, detectedAt: Date.now() };
+    settings = applyStation(baseSettings, station);
+    await setSetting(db, 'station', station);
+    runtime.stationReady = true;
+    lastStationError = null;
+    // Coordinates are kept out of the logs: GitHub Actions logs may be readable by others.
+    await logger.info('station.detected', `Kit station detected (${describeStation(station)}).`);
+    queue.poke();
   }
 
   async function heartbeat() {
@@ -323,6 +402,7 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
       username: bot ? bot.username : secrets.minecraft.username,
       paused: runtime.paused,
       maintenance: runtime.maintenance,
+      stationReady: runtime.stationReady,
       currentRequest: cur ? { id: cur.id, kit: cur.kit, player: cur.mc_username } : null,
       reconnectAttempt
     });

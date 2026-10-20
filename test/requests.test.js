@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { parseCommand, parseChatLine, compilePatterns, createRequestHandler } = require('../src/requests');
+const { parseCommand, parseChatLine, parseSignedChat, compilePatterns, createRequestHandler } = require('../src/requests');
 const linking = require('../src/linking');
 const { sqliteDb, testSettings, fakeLogger, member, MIN } = require('./helpers');
 
@@ -140,5 +140,21 @@ test('Discord outage: requests are rejected, links are kept', async () => {
   h.clock.t += 5000;
   assert.equal((await h.handle('Alice', '!kit totem')).reason, 'discord_unavailable');
   assert.ok(await linking.getActiveLinkByUsername(h.db, 'Alice'));
+  assert.equal(Number((await h.db.get('SELECT COUNT(*) AS n FROM requests')).n), 0);
+});
+
+test('signed player chat is parsed from the known sender, whatever the format', () => {
+  assert.deepEqual(parseSignedChat('<Steve> !kit totem', 'Steve'), { username: 'Steve', message: '!kit totem' });
+  assert.deepEqual(parseSignedChat('[Owner] Steve » !kit pvp', 'Steve'), { username: 'Steve', message: '!kit pvp' });
+  assert.deepEqual(parseSignedChat('Steve: !link ABCD-2345', 'Steve'), { username: 'Steve', message: '!link ABCD-2345' });
+  assert.equal(parseSignedChat('Steve joined the game', 'Steve'), null);
+});
+
+test('requests are refused while the kit station has not been found', async () => {
+  const h = await setup({ runtime: { stationReady: false } });
+  await h.linkAlice();
+  h.clock.t += 5000;
+  const r = await h.handle('Alice', '!kit totem');
+  assert.equal(r.reason, 'not_set_up');
   assert.equal(Number((await h.db.get('SELECT COUNT(*) AS n FROM requests')).n), 0);
 });

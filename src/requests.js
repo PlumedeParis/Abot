@@ -26,6 +26,19 @@ function parseChatLine(line, compiled) {
   return null;
 }
 
+// For signed player chat the server tells us who sent the message (UUID), so
+// only the message text has to be found: it follows the sender's name and a
+// separator such as ">", ":" or "»", whatever the chat format.
+function parseSignedChat(line, username) {
+  if (typeof line !== 'string' || line.length > 512) return null;
+  const idx = line.indexOf(username);
+  if (idx < 0) return null;
+  const rest = line.slice(idx + username.length);
+  const m = /^\s*(?:>|:|»|>>|\]|\)|-|\|)+\s*(.+)$/.exec(rest);
+  if (!m) return null;
+  return { username, message: m[1].trim() };
+}
+
 // Returns null when the message is not a bot command (normal chat is ignored).
 function parseCommand(message, chat) {
   if (typeof message !== 'string') return null;
@@ -93,6 +106,7 @@ function createRequestHandler({ db, getSettings, getRuntime, logger, checkMember
     if (runtime.maintenance) return reject(username, kit, 'maintenance', 'The kit bot is under maintenance. Please try again later.');
     if (runtime.paused) return reject(username, kit, 'paused', 'Kit deliveries are paused right now. Please try again later.');
     if (!runtime.minecraftReady) return reject(username, kit, 'not_ready', 'The kit bot is not ready yet. Please try again in a moment.');
+    if (runtime.stationReady === false) return reject(username, kit, 'not_set_up', 'The kit bot is not set up yet. Please try again later.', 'warn');
 
     const link = await linking.getActiveLinkByUsername(db, username);
     if (!link) {
@@ -195,4 +209,4 @@ function createRequestHandler({ db, getSettings, getRuntime, logger, checkMember
   };
 }
 
-module.exports = { compilePatterns, parseChatLine, parseCommand, createRequestHandler, LINK_ERRORS };
+module.exports = { compilePatterns, parseChatLine, parseSignedChat, parseCommand, createRequestHandler, LINK_ERRORS };

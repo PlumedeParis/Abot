@@ -75,7 +75,7 @@ test('slash command definitions are valid', () => {
   const kitbot = cmds.find((c) => c.name === 'kitbot');
   assert.deepEqual(
     kitbot.options.map((o) => o.name),
-    ['status', 'stats', 'player', 'queue', 'pause', 'resume', 'maintenance', 'unlink', 'cooldown-reset', 'quota-reset', 'reload', 'logs', 'help']
+    ['status', 'stats', 'player', 'queue', 'pause', 'resume', 'maintenance', 'unlink', 'cooldown-reset', 'quota-reset', 'reload', 'recalibrate', 'logs', 'help']
   );
   assert.equal(kitbot.default_member_permissions, '8', 'hidden from non-administrators by default');
   assert.ok(cmds.find((c) => c.name === 'link'));

@@ -4,8 +4,47 @@ An automated kit bot for an anarchy server (set up here for **1b1t.cc**). Player
 
 - **Minecraft bot:** Node.js + [Mineflayer](https://github.com/PrismarineJS/mineflayer) 4.39.0 (1.21.11 is in its tested versions)
 - **Discord bot:** discord.js 14.27.0, slash commands
-- **Storage:** PostgreSQL (`DATABASE_URL`) or SQLite (local file)
-- **CI / short sessions:** GitHub Actions. **24/7:** a permanent host (VPS or Docker), see [§12](#12-migrate-to-permanent-hosting)
+- **Storage:** SQLite (kept between GitHub Actions runs in the Actions cache) or PostgreSQL (`DATABASE_URL`)
+- **Sessions:** GitHub Actions (up to about 6 hours per run). **24/7:** a permanent host (VPS or Docker), see [§12](#12-migrate-to-permanent-hosting)
+
+---
+
+## Quick start (GitHub Actions, about 15 minutes)
+
+Defaults are set for **1b1t.cc** and the bot account **VoidClanKitBot** (offline mode, `/reg` on the first join, `/log` after that). The only secret you need is the Discord bot token. The bot finds your Discord server, creates a private `#kitbot-logs` channel, makes the server owner its administrator, and finds the kit chests by itself.
+
+**1. Discord bot (5 min)**
+1. <https://discord.com/developers/applications> → **New Application** → name it → **Create**.
+2. **Bot** tab → **Reset Token** → **Copy** (keep it private).
+3. Same tab → **Server Members Intent** → ON → **Save Changes**.
+4. **General Information** tab → copy the **Application ID**, open this link with it, choose your server and click **Authorize**:
+   `https://discord.com/oauth2/authorize?client_id=APPLICATION_ID&scope=bot%20applications.commands&permissions=19472`
+
+**2. One GitHub secret (1 min)**
+Repository → **Settings → Secrets and variables → Actions → New repository secret** → Name `DISCORD_TOKEN`, Secret = the token → **Add secret**.
+
+**3. Kit station in Minecraft (10 min)**
+1. Join 1b1t.cc with your own launcher **as `VoidClanKitBot`** and log in (`/log <password>`, or `/reg <password> <password>` the very first time).
+2. Go to your base and sleep in a bed there, so the bot respawns there if it dies.
+3. Stand on the block where the bot should live and **face north, south, east or west**. Place:
+   - the **totem** chest 1–6 blocks to your **left**,
+   - the **pvp** chest 1–6 blocks to your **right**,
+   - the **grief** chest 1–6 blocks **behind** you
+
+   in a straight line from that block, at foot level or one block up or down, with a free path to each.
+4. Fill each chest with **pre-filled shulker boxes** (1 shulker per delivery).
+5. **Log out while standing on that block, facing the same way.**
+
+**4. Start it**
+**Actions** tab → **Run KitBot** → **Run workflow** → tick **"I have read the 1b1t.cc rules and automated bots are allowed"** → **Run workflow**.
+
+When the bot logs in, it detects the three chests and reports in `#kitbot-logs`. If a chest is not found, the message says which one. Fix it in game and run `/kitbot recalibrate`. A run lasts up to 340 minutes; start it again for another session.
+
+Players then use `/link minecraft_username:<name>` in Discord, whisper `!link <code>` to VoidClanKitBot, and type `!kit totem`, `!kit pvp` or `!kit grief`. Players receive the kit standing next to the bot, so the default drop-off point is the bot's home spot. To use a different drop-off point or `/tpa`, see [§6](#6-configure-the-totem-pvp-and-grief-kit-locations).
+
+**Optional secrets** (only to change a default): `MINECRAFT_HOST`, `MINECRAFT_PORT`, `MINECRAFT_USERNAME`, `MINECRAFT_PASSWORD`, `MINECRAFT_AUTH`, `DISCORD_GUILD_ID` (needed only if the bot is in several servers), `DISCORD_LOG_CHANNEL_ID`, `DISCORD_ADMIN_IDS`, `DATABASE_URL`, `KITBOT_CONFIG_JSON`. The detailed installation guide below explains each one.
+
+**Data between runs:** without `DATABASE_URL`, links, cooldowns, quotas and the detected station are saved in the GitHub Actions cache when a run ends and restored at the next run. GitHub deletes caches that are not used for 7 days, so start a run at least once a week, or set `DATABASE_URL` (a free hosted PostgreSQL) for permanent storage.
 
 ---
 
@@ -44,11 +83,13 @@ An automated kit bot for an anarchy server (set up here for **1b1t.cc**). Player
 | `src/limits.js` | Cooldown, rolling quota, global rate |
 | `src/queue.js` | Delivery queue, exactly-once claiming, restart recovery |
 | `src/kits.js` | Left / right / backward geometry, chest retrieval, delivery and pickup confirmation |
+| `src/station.js` | Finds home, facing and the three kit chests around the bot |
+| `src/discord-setup.js` | Finds the Discord server, creates `#kitbot-logs`, picks the owner as admin |
 | `src/linking.js` | Single-use link codes, 30-day username change rule, history |
 | `src/membership.js` | Live Discord membership check (REST) |
 | `src/discord.js` / `src/admin.js` | Slash commands, confirmations, admin actions, log channel |
 | `scripts/` | Config validator, syntax check, bounded supervisor for GitHub Actions |
-| `test/` | 103 automated tests (see [§8](#8-run-the-tests)) |
+| `test/` | 117 automated tests (see [§8](#8-run-the-tests)) |
 
 ---
 
@@ -63,12 +104,12 @@ An automated kit bot for an anarchy server (set up here for **1b1t.cc**). Player
 - The live server **1b1t.cc**: its exact chat format, its login messages, whether `/msg`, `/tpa` and similar commands exist, and its bot rules. The defaults follow common AuthMe / vanilla formats. Run once with `"consoleLevel": "DEBUG"` to see the real messages and adjust the patterns (see [§11](#11-troubleshooting)).
 
 ### Server rules (required)
-The bot will not start the Minecraft side until you set `"server": { "botsAllowedConfirmed": true }`. Read 1b1t's rules first and confirm that automated accounts and kit bots are allowed. The bot does not bypass anti-bot or anti-cheat systems, and if a kick message matches `server.stopOnKickPattern` ("banned", "bots not allowed", …) it **stops reconnecting**.
+The bot will not start the Minecraft side until you confirm the rules: tick the box when starting the **Run KitBot** workflow (or set `KITBOT_BOTS_ALLOWED=true`, or `"server": { "botsAllowedConfirmed": true }` in `config.json`). Read 1b1t's rules first and confirm that automated accounts and kit bots are allowed. The bot does not bypass anti-bot or anti-cheat systems, and if a kick message matches `server.stopOnKickPattern` ("banned", "bots not allowed", …) it **stops reconnecting**.
 
 ### 1b1t.cc specifics
 - It is an **offline-mode** (cracked) server with AuthMe-style login: `MINECRAFT_AUTH=offline`.
-- **First join:** `/reg <password> <password>`. **Later joins:** `/log <password>`. The bot does this automatically: it reads the server's prompt (`/reg…` or `/login…`) and falls back to a stored "already registered" flag. The password comes **only** from the `MINECRAFT_PASSWORD` secret and is redacted from all logs.
-- ⚠️ On a cracked server, anyone who knows the password *is* the bot, including its stash access. Use a long random password, never one that matches or resembles the username. If it has ever been shared, change it first (AuthMe servers usually support `/changepassword <old> <new>`; check that 1b1t does) and store only the new one in the secret.
+- **First join:** `/reg <password> <password>`. **Later joins:** `/log <password>`. The bot does this automatically: it reads the server's prompt (`/reg…` or `/login…`) and falls back to a stored "already registered" flag. The password comes from the `MINECRAFT_PASSWORD` environment variable. `bot.yml` uses the account owner's chosen password unless a secret with that name is set. It is redacted from all logs.
+- ⚠️ On a cracked server, anyone who knows the password *is* the bot, including its stash access. The default password is written in `bot.yml`, so anyone who can read this repository can log in as the bot. To protect the account, change the password in game (AuthMe servers usually support `/changepassword <old> <new>`; check that 1b1t does) and store the new one in a `MINECRAFT_PASSWORD` secret.
 - On offline-mode servers, Minecraft UUIDs are derived from the username. Identity is therefore proven by the server's login password: only someone logged in as that player can send `!link <code>` from that name.
 
 ---
@@ -87,7 +128,7 @@ Normal chat is ignored. A message counts only if it **starts** with `!kit` / `!l
 
 **In Discord (players):** `/link minecraft_username:<name> [replace:<old name>]`, `/linkstatus`
 
-**In Discord (admins):** `/kitbot status | stats | player | queue | pause | resume | maintenance | unlink | cooldown-reset | quota-reset | reload | logs | help`. `unlink`, `cooldown-reset`, `quota-reset` and `maintenance` need a confirmation click from the **same** admin within 60 seconds. Every admin action is logged at the ADMIN level.
+**In Discord (admins):** `/kitbot status | stats | player | queue | pause | resume | maintenance | unlink | cooldown-reset | quota-reset | reload | recalibrate | logs | help`. `unlink`, `cooldown-reset`, `quota-reset` and `maintenance` need a confirmation click from the **same** admin within 60 seconds. Every admin action is logged at the ADMIN level.
 
 ## Policies
 
@@ -118,18 +159,18 @@ Normal chat is ignored. A message counts only if it **starts** with `!kit` / `!l
 2. **Bot** tab → **Reset Token** → copy it. This is `DISCORD_TOKEN`. Never share it.
 3. Same tab, **Privileged Gateway Intents** → turn on **Server Members Intent** (required to detect members leaving). Message Content Intent is *not* needed.
 4. Turn on **Developer Mode** in your Discord client (User Settings → Advanced). You can now right-click to copy IDs:
-   - right-click your server → **Copy Server ID** → `DISCORD_GUILD_ID`
-   - create a private text channel `#kitbot-logs`, right-click it → **Copy Channel ID** → `DISCORD_LOG_CHANNEL_ID`
+   - right-click your server → **Copy Server ID** → `DISCORD_GUILD_ID` (optional; needed only if the bot is in more than one server)
+   - `DISCORD_LOG_CHANNEL_ID` is optional. Without it, the bot uses or creates a private `#kitbot-logs` channel.
 
 ### 2. Invite the bot to the server
 Replace `APP_ID` with the Application ID (General Information tab) and open:
 ```
-https://discord.com/oauth2/authorize?client_id=APP_ID&scope=bot%20applications.commands&permissions=19456
+https://discord.com/oauth2/authorize?client_id=APP_ID&scope=bot%20applications.commands&permissions=19472
 ```
-`19456` = View Channels + Send Messages + Embed Links. In `#kitbot-logs`, make sure the bot's role can view the channel, send messages and embed links. Slash commands are registered to your server automatically each time the bot starts.
+`19472` = View Channels + Send Messages + Embed Links + Manage Channels. Manage Channels lets the bot create its private `#kitbot-logs` channel. If you create that channel yourself, give the bot View / Send / Embed Links there. Slash commands are registered to your server automatically each time the bot starts.
 
 ### 3. Configure administrator permissions
-- Right-click each admin → **Copy User ID**, then put the IDs comma-separated in `DISCORD_ADMIN_IDS` (for example `123456789012345678,234567890123456789`).
+- By default, the **server owner** is the only administrator. To add others, right-click each admin → **Copy User ID**, then put all IDs (yours included) comma-separated in `DISCORD_ADMIN_IDS` (for example `123456789012345678,234567890123456789`).
 - `/kitbot` is hidden from members without the Discord *Administrator* permission. To show it to a moderator role: Server Settings → Integrations → KitBot → `/kitbot`.
 - **The allowlist is what actually protects the commands.** Every `/kitbot` command and confirmation button is checked server-side: the user must be in `DISCORD_ADMIN_IDS` *and* the command must come from `DISCORD_GUILD_ID`. Changing Discord's command permissions or calling the API directly does not get around this.
 - Optional: set `linking.requiredRoleId` to require a role (for example "Verified") in addition to membership.
@@ -147,21 +188,21 @@ cp config.example.json config.json # local settings, ignored by git
 ### 5. Add GitHub Secrets
 Repository → **Settings → Secrets and variables → Actions → New repository secret**:
 
-| Secret | Example / notes |
-|---|---|
-| `MINECRAFT_HOST` | `1b1t.cc` |
-| `MINECRAFT_PORT` | `25565` |
-| `MINECRAFT_USERNAME` | the bot account's in-game name |
-| `MINECRAFT_AUTH` | `offline` |
-| `MINECRAFT_PASSWORD` | the `/reg` / `/log` password (change it first, see above) |
-| `DISCORD_TOKEN` | from step 1 |
-| `DISCORD_GUILD_ID` | from step 1 |
-| `DISCORD_LOG_CHANNEL_ID` | from step 1 |
-| `DISCORD_ADMIN_IDS` | from step 3 |
-| `DATABASE_URL` | from step 7 (required on GitHub-hosted runners) |
-| `KITBOT_CONFIG_JSON` | your filled-in `config.json`, base64-encoded (see below) |
+| Secret | Required? | Default in `bot.yml` / notes |
+|---|---|---|
+| `DISCORD_TOKEN` | **yes** | from step 1 |
+| `MINECRAFT_HOST` | no | `1b1t.cc` |
+| `MINECRAFT_PORT` | no | `25565` |
+| `MINECRAFT_USERNAME` | no | `VoidClanKitBot` |
+| `MINECRAFT_AUTH` | no | `offline` |
+| `MINECRAFT_PASSWORD` | no | the account password written in `bot.yml`. Set this secret to use a different one |
+| `DISCORD_GUILD_ID` | no | the only server the bot is in |
+| `DISCORD_LOG_CHANNEL_ID` | no | `#kitbot-logs`, created if missing |
+| `DISCORD_ADMIN_IDS` | no | the server owner |
+| `DATABASE_URL` | no | SQLite kept in the Actions cache (see step 7) |
+| `KITBOT_CONFIG_JSON` | no | built-in settings with chest auto-detection |
 
-Your kit coordinates are stash coordinates on an anarchy server. Keep them out of git: `config.json` is ignored and is passed as a secret instead:
+If you write a `config.json` (for example to set a separate drop-off point), keep it out of git, because coordinates on an anarchy server are stash coordinates. `config.json` is ignored by git, so pass it as a secret instead. Raw JSON works, or base64:
 ```bash
 node scripts/validate-config.js config.json   # must say "valid"
 base64 -w0 config.json                        # macOS: base64 -i config.json
@@ -169,7 +210,11 @@ base64 -w0 config.json                        # macOS: base64 -i config.json
 Paste the output as `KITBOT_CONFIG_JSON`. Update the secret whenever you change `config.json`.
 
 ### 6. Configure the TOTEM, PVP and GRIEF kit locations
-Build the station in game: a spot where the bot stands ("home"), with the **totem** chest to its **left**, the **pvp** chest to its **right**, and the **grief** chest **behind** it. Then edit `config.json`:
+Build the station in game: a spot where the bot stands ("home"), with the **totem** chest to its **left**, the **pvp** chest to its **right**, and the **grief** chest **behind** it.
+
+**Automatic (default):** park the bot account on the home block, facing north, south, east or west, and log out. On its next login, the bot reads its own position and facing, then looks along each direction (up to `navigation.scanDistance` = 6 blocks, at foot level, one up or one down) for the first chest, barrel or shulker box. The result is stored and reused on later logins. The log channel reports what was found (without coordinates). `/kitbot recalibrate` repeats the detection from where the bot stands. The drop-off point defaults to the home block. Kit requests are refused until all three chests are found.
+
+**Manual:** to give exact coordinates instead (or a separate drop-off point), edit `config.json`:
 
 1. Stand on the home block and press **F3**. Copy the integer `Block:` X Y Z and the direction under `Facing:` (`north`, `south`, `east` or `west`):
    ```json
@@ -202,7 +247,8 @@ Build the station in game: a spot where the bot stands ("home"), with the **tote
 7. Validate: `npm run validate-config`.
 
 ### 7. Create and configure the database
-- **PostgreSQL (required for GitHub-hosted runners):** create a free database at any hosted PostgreSQL provider (for example Neon or Supabase), copy its connection string including `?sslmode=require`, and save it as `DATABASE_URL`:
+- **Nothing (default on GitHub Actions):** with no `DATABASE_URL`, the bot uses SQLite at `data/kitbot.db`. `bot.yml` restores it from the Actions cache at the start of a run and saves it at the end, including after a crash or cancellation. GitHub removes caches unused for 7 days, so run the bot at least weekly, or use PostgreSQL. If a runner is killed abruptly, changes since the start of that run can be lost.
+- **PostgreSQL (permanent, recommended for regular use):** create a free database at any hosted PostgreSQL provider (for example Neon or Supabase), copy its connection string including `?sslmode=require`, and save it as `DATABASE_URL`:
   `postgresql://user:password@host/dbname?sslmode=require`
   Tables are created automatically on first start. There is nothing to run by hand.
 - **SQLite (local PC / VPS):** leave `DATABASE_URL` empty. The database is created at `SQLITE_PATH` (default `./data/kitbot.db`). Back up that file.
@@ -212,7 +258,7 @@ Build the station in game: a spot where the bot stands ("home"), with the **tote
 npm ci
 npm run check                    # syntax check
 npm run validate-config:example  # example settings structure
-npm test                         # 103 tests, about 2–3 minutes
+npm test                         # 117 tests, about 2–3 minutes
 ```
 The tests cover cooldowns (shared across kits), the rolling quota, refunds, the global 2-per-minute limit, one-pending-request races, restart persistence, linking (single-use codes, takeover protection, 30-day changes, history), access revocation when a member leaves, fail-closed Discord outages, admin permissions (non-admins, other guilds, forged confirmations), the guarantee that failed or unconfirmed deliveries are never reported as successful, secret redaction, and a real-protocol run against a fake 1.21.11 server. The `ci.yml` workflow runs all of this on every push.
 
@@ -223,13 +269,13 @@ npm start                  # both bots
 npm run start:minecraft    # only Minecraft
 npm run start:discord      # only Discord
 ```
-On GitHub Actions: **Actions → "Run KitBot (bounded session)" → Run workflow**, then choose the duration (up to 340 minutes), the role and the runner. The job installs dependencies, checks the secrets, validates the settings, runs the bot under `scripts/supervise.js` (which restarts it after a crash, up to 5 times), shuts it down cleanly before the time limit, and uploads the console log as an artifact. Only one copy can run at a time.
+On GitHub Actions: **Actions → "Run KitBot" → Run workflow**, tick the rules confirmation, then choose the duration (up to 340 minutes), the role and the runner. The job installs dependencies, checks the secrets, validates the settings, runs the bot under `scripts/supervise.js` (which restarts it after a crash, up to 5 times), shuts it down cleanly before the time limit, and uploads the console log as an artifact. Only one copy can run at a time.
 
 Stop the bot with Ctrl+C or SIGTERM (or cancel the workflow). It finishes or aborts the current delivery, records its state, logs the shutdown and disconnects cleanly.
 
 ### 10. Inspect logs
 - **Discord:** `#kitbot-logs` gets embeds (blue INFO, yellow WARNING, red ERROR, purple ADMIN, all timestamped) for startup and shutdown, Minecraft and Discord connections, links, unlinks, members leaving, accepted, rejected and queued requests, delivery start, completion and failure, cooldown and quota violations, username changes, maintenance and admin actions, and errors and reconnects.
-- **`/kitbot logs`** (last 15 events), **`/kitbot status`** (connections, queue, recent errors).
+- **`/kitbot logs`** (last 15 events), **`/kitbot status`** (connections, kit station, queue, recent errors).
 - **Console:** one line per event. Set `"logging": { "consoleLevel": "DEBUG" }` to also print every server chat line (useful for tuning patterns; never sent to Discord).
 - **GitHub Actions:** the job log, or the `kitbot-log-<run id>` artifact (kept 7 days).
 - **systemd:** `journalctl -u kitbot -f`. **Docker:** `docker compose logs -f kitbot`.
@@ -299,16 +345,14 @@ docker compose logs -f kitbot
 
 ---
 
-## Everything you must configure yourself
-1. Confirm in 1b1t's rules that bots are allowed, then set `server.botsAllowedConfirmed: true`.
-2. The bot's Minecraft account name (`MINECRAFT_USERNAME`) and a **new, strong** `MINECRAFT_PASSWORD`.
-3. The Discord application, token, Server Members Intent, invite, server ID, log channel ID and admin IDs.
-4. A PostgreSQL `DATABASE_URL` (for GitHub-hosted runs) or a host with a disk for SQLite.
-5. In game: the home spot, the three chests (totem left, pvp right, grief behind), stocked kits (one pre-filled shulker box per delivery by default), and a reachable drop-off point. Then their coordinates in `config.json`.
-6. The delivery method that really works on 1b1t (`drop` by default; `teleport` only if a tpa plugin exists).
-7. Check with DEBUG logging that `chat.patterns`, `chat.replyCommand` and the `auth.*Pattern` values match 1b1t's real messages.
-8. `KITBOT_CONFIG_JSON` (base64 of `config.json`) as a GitHub Secret, updated whenever you change settings.
-9. Restock the chests regularly. When a chest is empty, players get an "out of stock" message, the request is refunded, and the ERROR in the log channel tells you which kit.
+## Everything you must do yourself
+These need your accounts or your hands in the game. Everything else has a default:
+1. Check that 1b1t's rules allow bots, and tick the box when starting the workflow.
+2. Create the Discord application, copy the token, turn on Server Members Intent and invite the bot (Quick start step 1).
+3. Add the `DISCORD_TOKEN` secret (Quick start step 2).
+4. In game: park VoidClanKitBot at home with the three stocked chests around it (Quick start step 3), and set its bed nearby.
+5. Restock the chests regularly. When a chest is empty, players get an "out of stock" message, the request is refunded, and an ERROR in the log channel names the kit.
+6. If players' `!kit` messages are ignored, the server's chat format differs from the defaults. See [§11](#11-troubleshooting).
 
 ## Configuration reference (`config.json`)
 | Key | Default | Meaning |
@@ -325,7 +369,8 @@ docker compose logs -f kitbot
 | `limits.globalPerMinute` / `maxQueueSize` / `maxQueueWaitMinutes` / `maxAttempts` | `2` / `20` / `30` / `2` | Queue limits |
 | `linking.maxLinksPerDiscord` / `codeTtlMinutes` / `usernameChangeCooldownDays` | `1` / `10` / `30` | Linking rules |
 | `linking.requiredRoleId` | `null` | Optional Discord role required to use the bot |
-| `navigation.home` | — | `{x, y, z, facing}` |
+| `navigation.autoDetect` / `scanDistance` | `true` / `6` | Detect home and chests around the bot when `home` is unset |
+| `navigation.home` | auto | `{x, y, z, facing}` |
 | `navigation.allowDigging` / `allowPlacing` / `allowParkour` | `false` | Movement permissions |
 | `delivery.*` | `drop` | Default delivery. Override per kit with `kits.<name>.delivery` |
 | `kits.<name>` | — | `direction`, `distance` or `standAt`, `timeoutMs`, `retrieval{method, container, items}` |

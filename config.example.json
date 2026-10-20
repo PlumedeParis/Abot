@@ -33,7 +33,9 @@
       "^<(?<username>[A-Za-z0-9_]{1,16})> (?<message>.+)$",
       "^(?<username>[A-Za-z0-9_]{1,16}) whispers(?: to you)?: (?<message>.+)$",
       "^\\[(?<username>[A-Za-z0-9_]{1,16}) -> (?:me|you)\\] (?<message>.+)$",
-      "^From (?<username>[A-Za-z0-9_]{1,16}): (?<message>.+)$"
+      "^From (?<username>[A-Za-z0-9_]{1,16}): (?<message>.+)$",
+      "^(?<username>[A-Za-z0-9_]{1,16}) -> (?:me|you): (?<message>.+)$",
+      "^(?:\\[[^\\]]{1,32}\\] ?)*(?<username>[A-Za-z0-9_]{1,16}) ?(?:»|>>|:) (?<message>.+)$"
     ]
   },
   "limits": {
@@ -59,7 +61,9 @@
     "confirmationTimeoutSeconds": 60
   },
   "navigation": {
-    "home": { "x": null, "y": null, "z": null, "facing": "north" },
+    "autoDetect": true,
+    "scanDistance": 6,
+    "home": null,
     "returnHomeAfterDelivery": true,
     "allowDigging": false,
     "allowPlacing": false,
@@ -74,7 +78,7 @@
     "commands": [],
     "acceptRequest": null,
     "afterCommands": [],
-    "instructions": "Your {kit} kit is ready. Come to the drop-off point.",
+    "instructions": "Your {kit} kit is ready. Come to the bot to receive it.",
     "playerRadius": 4,
     "waitForPlayerMs": 60000,
     "pickupTimeoutMs": 15000,
@@ -83,35 +87,50 @@
   "kits": {
     "totem": {
       "direction": "left",
-      "distance": 3,
+      "distance": null,
       "standAt": null,
       "timeoutMs": 60000,
       "retrieval": {
         "method": "chest",
         "container": null,
-        "items": [{ "nameRegex": "shulker_box$", "count": 1 }]
+        "items": [
+          {
+            "nameRegex": "shulker_box$",
+            "count": 1
+          }
+        ]
       }
     },
     "pvp": {
       "direction": "right",
-      "distance": 3,
+      "distance": null,
       "standAt": null,
       "timeoutMs": 60000,
       "retrieval": {
         "method": "chest",
         "container": null,
-        "items": [{ "nameRegex": "shulker_box$", "count": 1 }]
+        "items": [
+          {
+            "nameRegex": "shulker_box$",
+            "count": 1
+          }
+        ]
       }
     },
     "grief": {
       "direction": "backward",
-      "distance": 3,
+      "distance": null,
       "standAt": null,
       "timeoutMs": 60000,
       "retrieval": {
         "method": "chest",
         "container": null,
-        "items": [{ "nameRegex": "shulker_box$", "count": 1 }]
+        "items": [
+          {
+            "nameRegex": "shulker_box$",
+            "count": 1
+          }
+        ]
       }
     }
   },

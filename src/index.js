@@ -11,6 +11,7 @@ const { loadDotEnv, loadConfig, loadSecrets, secretValues } = require('./config'
 const { openDatabase, setStatus } = require('./database');
 const { createLogger, createRedactor } = require('./logging');
 const { createMembershipChecker } = require('./membership');
+const { resolveDiscordContext } = require('./discord-setup');
 
 async function main() {
   loadDotEnv();
@@ -22,6 +23,11 @@ async function main() {
   const db = await openDatabase(config.secrets.database);
   await logger.setDatabase(db);
   await logger.info('bot.startup', `KitBot starting (role: ${role}, storage: ${db.dialect}, Minecraft ${config.secrets.minecraft.version}).`);
+
+  // Fill in the Discord server, log channel and admins when not configured.
+  const discordCtx = await resolveDiscordContext({ ...config.secrets.discord });
+  Object.assign(config.secrets.discord, { guildId: discordCtx.guildId, logChannelId: discordCtx.logChannelId, adminIds: discordCtx.adminIds });
+  for (const note of discordCtx.notes) await logger.info('discord.setup', note);
 
   const checkMembership = createMembershipChecker({
     token: config.secrets.discord.token,

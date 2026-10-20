@@ -18,6 +18,7 @@ function testSettings(overrides = {}) {
   s.server.botsAllowedConfirmed = true;
   s.navigation.home = { x: 0, y: 64, z: 0, facing: 'north' };
   s.delivery.dropoff = { x: 0, y: 64, z: 5 };
+  for (const k of Object.keys(s.kits)) s.kits[k].distance = 3;
   // One block past each kit's stand position (home facing north: totem west, pvp east, grief south).
   s.kits.totem.retrieval.container = { x: -4, y: 64, z: 0 };
   s.kits.pvp.retrieval.container = { x: 4, y: 64, z: 0 };

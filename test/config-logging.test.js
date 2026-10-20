@@ -58,12 +58,22 @@ test('logger persists redacted events to the outbox until they are sent', async 
   assert.equal((await fetchUnsentEvents(db)).length, 0);
 });
 
-test('config.example.json is structurally valid and lists what must be filled in', () => {
-  const ok = loadSettings({ KITBOT_CONFIG: EXAMPLE }, { allowPlaceholders: true });
-  assert.deepEqual(ok.errors, []);
-  const strict = loadSettings({ KITBOT_CONFIG: EXAMPLE });
-  assert.ok(strict.errors.some((e) => e.includes('navigation.home')));
-  assert.ok(strict.errors.some((e) => e.includes('kits.totem.retrieval.container')));
+test('config.example.json and the built-in defaults are valid (coordinates are auto-detected)', () => {
+  assert.deepEqual(loadSettings({ KITBOT_CONFIG: EXAMPLE }).errors, []);
+  const none = loadSettings({});
+  assert.equal(none.source, 'built-in defaults');
+  assert.deepEqual(none.errors, []);
+  // Without auto-detection, missing coordinates are reported.
+  const manual = loadSettings({ KITBOT_CONFIG_JSON: JSON.stringify({ navigation: { autoDetect: false } }) });
+  assert.ok(manual.errors.some((e) => e.includes('kits.totem.retrieval.container')));
+});
+
+test('only DISCORD_TOKEN is required; the workflow checkbox confirms the rules', () => {
+  const env = { DISCORD_TOKEN: 'x', MINECRAFT_HOST: '1b1t.cc', MINECRAFT_USERNAME: 'VoidClanKitBot' };
+  assert.throws(() => loadConfig({ env, role: 'all' }), /botsAllowedConfirmed/);
+  const c = loadConfig({ env: { ...env, KITBOT_BOTS_ALLOWED: 'true' }, role: 'all' });
+  assert.equal(c.settings.server.botsAllowedConfirmed, true);
+  assert.equal(c.secrets.discord.guildId, '');
 });
 
 test('the default kit directions follow the specification', () => {
@@ -92,7 +102,7 @@ test('invalid settings are rejected', () => {
 test('the bot refuses to start until the server rules are confirmed', () => {
   assert.throws(() => loadConfig({ env: ENV, role: 'minecraft' }), /botsAllowedConfirmed/);
   // The Discord-only role does not connect to Minecraft.
-  assert.throws(() => loadConfig({ env: ENV, role: 'discord' }), (e) => !/botsAllowedConfirmed/.test(e.message));
+  assert.equal(loadConfig({ env: ENV, role: 'discord' }).role, 'discord');
 });
 
 test('missing secrets are reported by name, never by value', () => {
@@ -100,7 +110,7 @@ test('missing secrets are reported by name, never by value', () => {
     loadConfig({ env: { KITBOT_CONFIG: EXAMPLE, MINECRAFT_PASSWORD: 'Sup3rSecretPw' }, role: 'all', allowPlaceholders: true });
     assert.fail('should throw');
   } catch (e) {
-    for (const name of ['MINECRAFT_HOST', 'MINECRAFT_USERNAME', 'DISCORD_TOKEN', 'DISCORD_GUILD_ID', 'DISCORD_LOG_CHANNEL_ID', 'DISCORD_ADMIN_IDS']) assert.match(e.message, new RegExp(name));
+    for (const name of ['MINECRAFT_HOST', 'MINECRAFT_USERNAME', 'DISCORD_TOKEN']) assert.match(e.message, new RegExp(name));
     assert.ok(!e.message.includes('Sup3rSecretPw'));
   }
 });
