@@ -1,0 +1,26 @@
+# systemd unit for a Linux VPS. Install:
+#   sudo cp deploy/kitbot.service /etc/systemd/system/kitbot.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now kitbot
+[Unit]
+Description=Anarchy KitBot (Minecraft + Discord)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kitbot
+WorkingDirectory=/opt/kitbot
+EnvironmentFile=/opt/kitbot/.env
+ExecStart=/usr/bin/node src/index.js
+Restart=on-failure
+RestartSec=15
+# Graceful shutdown: the bot finishes or aborts the current delivery first.
+KillSignal=SIGTERM
+TimeoutStopSec=120
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/kitbot/data
+
+[Install]
+WantedBy=multi-user.target

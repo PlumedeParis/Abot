@@ -1,0 +1,122 @@
+{
+  "server": {
+    "botsAllowedConfirmed": false,
+    "rulesUrl": "",
+    "version": "1.21.11",
+    "stopOnKickPattern": "(banned|blacklisted|bots? (are )?not allowed)"
+  },
+  "auth": {
+    "enabled": true,
+    "registerCommand": "/reg {password} {password}",
+    "loginCommand": "/log {password}",
+    "registerPromptPattern": "/reg(ister)?\\b",
+    "loginPromptPattern": "/l(og|ogin)\\b",
+    "successPattern": "(success|logged in)",
+    "alreadyRegisteredPattern": "already (been )?registered",
+    "notRegisteredPattern": "(isn't|is not|not) registered",
+    "failurePattern": "(wrong password|incorrect password|invalid password)",
+    "promptTimeoutMs": 10000,
+    "successTimeoutMs": 15000,
+    "postLoginCommands": [],
+    "postLoginDelayMs": 3000
+  },
+  "chat": {
+    "kitCommand": "!kit",
+    "linkCommand": "!link",
+    "replyCommand": "/msg {player} {message}",
+    "minDelayMs": 1500,
+    "maxLength": 240,
+    "perPlayerCommandIntervalMs": 3000,
+    "duplicateWindowMs": 5000,
+    "requireOnlinePlayer": true,
+    "patterns": [
+      "^<(?<username>[A-Za-z0-9_]{1,16})> (?<message>.+)$",
+      "^(?<username>[A-Za-z0-9_]{1,16}) whispers(?: to you)?: (?<message>.+)$",
+      "^\\[(?<username>[A-Za-z0-9_]{1,16}) -> (?:me|you)\\] (?<message>.+)$",
+      "^From (?<username>[A-Za-z0-9_]{1,16}): (?<message>.+)$"
+    ]
+  },
+  "limits": {
+    "cooldownMinutes": 10,
+    "dailyQuota": 10,
+    "quotaWindowHours": 24,
+    "globalPerMinute": 2,
+    "maxQueueSize": 20,
+    "maxQueueWaitMinutes": 30,
+    "maxAttempts": 2
+  },
+  "linking": {
+    "maxLinksPerDiscord": 1,
+    "codeTtlMinutes": 10,
+    "usernameChangeCooldownDays": 30,
+    "maxFailedCodeAttemptsPerHour": 5,
+    "requiredRoleId": null
+  },
+  "discord": {
+    "membershipTimeoutMs": 8000,
+    "reconcileIntervalMinutes": 30,
+    "logFlushIntervalSeconds": 5,
+    "confirmationTimeoutSeconds": 60
+  },
+  "navigation": {
+    "home": { "x": null, "y": null, "z": null, "facing": "north" },
+    "returnHomeAfterDelivery": true,
+    "allowDigging": false,
+    "allowPlacing": false,
+    "allowParkour": false,
+    "allowSprinting": true,
+    "arriveRadius": 1,
+    "defaultTimeoutMs": 60000
+  },
+  "delivery": {
+    "method": "drop",
+    "dropoff": null,
+    "commands": [],
+    "acceptRequest": null,
+    "afterCommands": [],
+    "instructions": "Your {kit} kit is ready. Come to the drop-off point.",
+    "playerRadius": 4,
+    "waitForPlayerMs": 60000,
+    "pickupTimeoutMs": 15000,
+    "returnUndelivered": true
+  },
+  "kits": {
+    "totem": {
+      "direction": "left",
+      "distance": 3,
+      "standAt": null,
+      "timeoutMs": 60000,
+      "retrieval": {
+        "method": "chest",
+        "container": null,
+        "items": [{ "nameRegex": "shulker_box$", "count": 1 }]
+      }
+    },
+    "pvp": {
+      "direction": "right",
+      "distance": 3,
+      "standAt": null,
+      "timeoutMs": 60000,
+      "retrieval": {
+        "method": "chest",
+        "container": null,
+        "items": [{ "nameRegex": "shulker_box$", "count": 1 }]
+      }
+    },
+    "grief": {
+      "direction": "backward",
+      "distance": 3,
+      "standAt": null,
+      "timeoutMs": 60000,
+      "retrieval": {
+        "method": "chest",
+        "container": null,
+        "items": [{ "nameRegex": "shulker_box$", "count": 1 }]
+      }
+    }
+  },
+  "logging": {
+    "retentionDays": 30,
+    "consoleLevel": "INFO"
+  }
+}

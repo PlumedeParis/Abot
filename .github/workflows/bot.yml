@@ -1,0 +1,91 @@
+name: Run KitBot (bounded session)
+
+# Starts the bot for ONE bounded session, started by hand. GitHub-hosted
+# runners are temporary and jobs are limited to 6 hours, so this workflow is
+# for testing and short supervised sessions, not 24/7 hosting. It never
+# re-triggers itself. For 24/7 operation use a permanent host (see README) or
+# a self-hosted runner on a machine you control.
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration_minutes:
+        description: "How long to run (minutes, max 340)"
+        required: true
+        default: "120"
+      role:
+        description: "Which part to run"
+        required: true
+        default: all
+        type: choice
+        options: [all, minecraft, discord]
+      runner:
+        description: "Runner label (ubuntu-latest or self-hosted)"
+        required: true
+        default: ubuntu-latest
+
+permissions:
+  contents: read
+
+# Never run two copies of the bot at once (one Minecraft account, one inventory).
+concurrency:
+  group: kitbot
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 350
+    env:
+      MINECRAFT_HOST: ${{ secrets.MINECRAFT_HOST }}
+      MINECRAFT_PORT: ${{ secrets.MINECRAFT_PORT }}
+      MINECRAFT_USERNAME: ${{ secrets.MINECRAFT_USERNAME }}
+      MINECRAFT_AUTH: ${{ secrets.MINECRAFT_AUTH }}
+      MINECRAFT_PASSWORD: ${{ secrets.MINECRAFT_PASSWORD }}
+      DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+      DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
+      DISCORD_LOG_CHANNEL_ID: ${{ secrets.DISCORD_LOG_CHANNEL_ID }}
+      DISCORD_ADMIN_IDS: ${{ secrets.DISCORD_ADMIN_IDS }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      KITBOT_CONFIG_JSON: ${{ secrets.KITBOT_CONFIG_JSON }}
+      KITBOT_RUN_MINUTES: ${{ inputs.duration_minutes }}
+      KITBOT_ROLE_INPUT: ${{ inputs.role }}
+      RUNNER_LABEL: ${{ inputs.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --omit=dev
+
+      - name: Check required secrets
+        shell: bash
+        run: |
+          missing=0
+          for name in MINECRAFT_HOST MINECRAFT_USERNAME DISCORD_TOKEN DISCORD_GUILD_ID DISCORD_LOG_CHANNEL_ID DISCORD_ADMIN_IDS KITBOT_CONFIG_JSON; do
+            if [ -z "${!name}" ]; then echo "::error::Secret $name is not set"; missing=1; fi
+          done
+          if [ "$RUNNER_LABEL" != "self-hosted" ] && [ -z "$DATABASE_URL" ]; then
+            echo "::error::DATABASE_URL is required on GitHub-hosted runners: their disk is wiped after the job, so SQLite would lose cooldowns, quotas and links."
+            missing=1
+          fi
+          exit $missing
+
+      - name: Validate settings
+        run: node scripts/validate-config.js
+
+      - name: Run the bot (supervised, bounded)
+        shell: bash
+        run: node scripts/supervise.js "$KITBOT_ROLE_INPUT" 2>&1 | tee kitbot.log
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kitbot-log-${{ github.run_id }}
+          path: kitbot.log
+          retention-days: 7

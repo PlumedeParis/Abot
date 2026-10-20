@@ -1,0 +1,35 @@
+# Permanent hosting with Docker Compose: the bot plus a PostgreSQL database.
+#   cp .env.example .env    (fill it in; DATABASE_URL is set below)
+#   cp config.example.json config.json   (fill in coordinates)
+#   docker compose up -d --build
+services:
+  kitbot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://kitbot:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/kitbot
+      KITBOT_CONFIG: /app/config.json
+    volumes:
+      - ./config.json:/app/config.json:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    stop_grace_period: 2m
+
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: kitbot
+      POSTGRES_DB: kitbot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kitbot -d kitbot"]
+      interval: 5s
+      retries: 10
+
+volumes:
+  pgdata:

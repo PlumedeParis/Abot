@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Syntax check
+        run: npm run check
+
+      - name: Validate example configuration
+        run: npm run validate-config:example
+
+      - name: Tests (quotas, cooldowns, linking, admin permissions, delivery, protocol)
+        run: npm test
+
+      - name: Check that no secrets or private config are committed
+        run: |
+          if git ls-files | grep -E '(^|/)(\.env|config\.json)$'; then
+            echo "::error::.env or config.json is committed. Remove it and use GitHub Secrets."
+            exit 1
+          fi
