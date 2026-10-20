@@ -381,7 +381,9 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
     });
     if (!result.ok) {
       runtime.stationReady = false;
-      const msg = `Kit station not found: no chest for ${result.missing.join(', ')}. Log in as the bot account, stand on the home block facing the right way with the totem chest to the LEFT, pvp chest to the RIGHT and grief chest BEHIND (within ${settings.navigation.scanDistance} blocks), log out, then run /kitbot recalibrate.`;
+      const msg = result.ambiguous
+        ? 'Kit station is ambiguous: the chests around the bot match more than one orientation. Keep the side opposite the grief chest free of chests, barrels and shulker boxes, then run /kitbot recalibrate.'
+        : `Kit station not found: no chest for ${result.missing.join(', ')}. Around the bot's spot, the totem chest must be on one side, the pvp chest on the opposite side and the grief chest on a third side (seen from the bot: left, right, behind), each in a straight line within ${settings.navigation.scanDistance} blocks, with no container on the fourth side. Then run /kitbot recalibrate (it also retries by itself every 2 minutes).`;
       if (msg !== lastStationError) await logger.error('station.missing', msg);
       lastStationError = msg;
       return;
@@ -393,7 +395,7 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
     runtime.stationReady = true;
     lastStationError = null;
     // Coordinates are kept out of the logs: GitHub Actions logs may be readable by others.
-    await logger.info('station.detected', `Kit station detected (${describeStation(station)}).`);
+    await logger.info('station.detected', `Kit station detected (${describeStation(station)})${result.facingCorrected ? '; the bot was not facing that way, so its orientation was worked out from the chests' : ''}.`);
     queue.poke();
   }
 

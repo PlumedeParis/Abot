@@ -88,3 +88,24 @@ test('explicitly configured coordinates win over detection', () => {
   });
   assert.deepEqual(applyStation(configured, r).kits.pvp.retrieval.container, { x: 1, y: 2, z: 3 });
 });
+
+test('the bot does not need to face the right way: the only matching orientation is used', async () => {
+  // Real layout facing north: totem west (-x), pvp east (+x), grief south (+z); nothing in front (north).
+  const blocks = world({ '97,64,200': 'chest', '103,64,200': 'barrel', '100,64,203': 'chest' });
+  for (const deg of [0, 90, -90]) {
+    const r = detectStation({ position: { x: 100.5, y: 64, z: 200.5 }, yaw: f3DegreesToYaw(deg), blockAt: blocks, kits: DEFAULTS.kits });
+    assert.equal(r.ok, true, `bot facing F3 ${deg}`);
+    assert.equal(r.home.facing, 'north');
+    assert.deepEqual(r.kits.totem.container, { x: 97, y: 64, z: 200 });
+    assert.deepEqual(r.kits.pvp.container, { x: 103, y: 64, z: 200 });
+    assert.equal(r.facingCorrected, true);
+  }
+});
+
+test('with containers on all four sides, the bot\'s own facing decides', async () => {
+  const blocks = world({ '97,64,200': 'chest', '103,64,200': 'chest', '100,64,203': 'chest', '100,64,197': 'barrel' });
+  const r = detectStation({ position: { x: 100.5, y: 64, z: 200.5 }, yaw: f3DegreesToYaw(0), blockAt: blocks, kits: DEFAULTS.kits });
+  assert.equal(r.ok, true);
+  assert.equal(r.home.facing, 'south');
+  assert.equal(r.facingCorrected, undefined);
+});

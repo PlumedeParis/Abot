@@ -23,9 +23,27 @@ function facingFromYaw(yaw) {
 }
 
 // blockAt({x, y, z}) -> { name } | null
+// The bot's own facing is tried first. Because the kit chests sit left, right
+// and behind, only the correct orientation finds all three (the fourth side,
+// "in front", has no chest), so if the bot is turned the wrong way the other
+// three orientations are tried and a single match is accepted (two or more
+// matches are ambiguous and refused). With containers on all four sides the
+// bot's own facing always matches, so it decides.
 function detectStation({ position, yaw, blockAt, kits, scanDistance = 6 }) {
+  const own = facingFromYaw(yaw);
+  const first = detectFacing({ position, facing: own, blockAt, kits, scanDistance });
+  if (first.ok) return first;
+  const others = Object.keys(FACINGS)
+    .filter((f) => f !== own)
+    .map((facing) => detectFacing({ position, facing, blockAt, kits, scanDistance }))
+    .filter((r) => r.ok);
+  if (others.length === 1) return { ...others[0], facingCorrected: true };
+  if (others.length > 1) return { ...first, ambiguous: true };
+  return first;
+}
+
+function detectFacing({ position, facing, blockAt, kits, scanDistance }) {
   const home = { x: Math.floor(position.x), y: Math.floor(position.y), z: Math.floor(position.z) };
-  const facing = facingFromYaw(yaw);
   const cardinalYaw = f3DegreesToYaw(FACINGS[facing]);
   const found = {};
   const missing = [];
