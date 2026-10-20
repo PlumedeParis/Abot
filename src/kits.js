@@ -293,11 +293,40 @@ function createKitService({ getBot, getSettings, logger, sendCommand, onChatLine
     }
   }
 
+  function distanceFromHome() {
+    const home = getSettings().navigation.home;
+    if (!home) return 0;
+    return getBot().entity.position.distanceTo(new Vec3(home.x + 0.5, home.y, home.z + 0.5));
+  }
+
+  const isFarFromHome = () => distanceFromHome() > getSettings().navigation.farFromHomeBlocks;
+  let returning = false;
+
+  // Gets back to base. When the bot is too far to walk (e.g. after teleporting
+  // to a player), it runs navigation.returnCommands (default "/kill": respawn
+  // at the bed next to the base), then walks the last blocks to home.
   async function goHome(signal) {
-    const s = getSettings();
-    if (!s.navigation.home || !s.navigation.returnHomeAfterDelivery) return;
+    const nav = getSettings().navigation;
+    if (!nav.home || !nav.returnHomeAfterDelivery) return;
     try {
-      await goTo(s.navigation.home, s.navigation.arriveRadius, s.navigation.defaultTimeoutMs, signal, 'home');
+      if (isFarFromHome() && nav.returnCommands.length) {
+        returning = true;
+        try {
+          for (const cmd of nav.returnCommands) await sendCommand(cmd);
+          await waitFor(() => !isFarFromHome() && getBot().health > 0, {
+            timeoutMs: nav.respawnWaitMs,
+            signal,
+            message: `still ${Math.round(distanceFromHome())} blocks from home after ${nav.returnCommands.join(', ')}`
+          });
+        } finally {
+          returning = false;
+        }
+      }
+      if (isFarFromHome()) {
+        await logger.error('navigation.home', `The bot is ${Math.round(distanceFromHome())} blocks from home and cannot walk back. Check that its bed is next to the base and that ${nav.returnCommands.join(', ') || 'a return command'} works on this server.`);
+        return;
+      }
+      await goTo(nav.home, nav.arriveRadius, nav.defaultTimeoutMs, signal, 'home');
     } catch (e) {
       await logger.warn('navigation.home', `Could not return home: ${e.message}`);
     }
@@ -315,6 +344,10 @@ function createKitService({ getBot, getSettings, logger, sendCommand, onChatLine
 
     try {
       await ctx.setStage('navigating');
+      if (isFarFromHome()) {
+        await goHome(signal);
+        if (isFarFromHome()) throw new DeliveryError('the bot is away from its base and could not get back');
+      }
       await goTo(resolveStandAt(s, kitName), s.navigation.arriveRadius, timeoutMs, signal, `the ${kitName} kit (${kit.direction})`);
       if (kit.lookYawDegrees !== undefined) await getBot().look(f3DegreesToYaw(kit.lookYawDegrees), 0, true);
 
@@ -334,17 +367,31 @@ function createKitService({ getBot, getSettings, logger, sendCommand, onChatLine
       } else {
         for (const cmd of delivery.commands) await sendCommand(cmd.replace(/\{player\}/g, request.mc_username));
       }
-      await waitFor(() => playerNear(request.mc_username, delivery.playerRadius), {
-        timeoutMs: delivery.waitForPlayerMs,
-        signal,
-        message: 'player did not come close enough to receive the kit'
-      });
+      const teleport = delivery.method === 'teleport';
+      try {
+        await waitFor(() => playerNear(request.mc_username, delivery.playerRadius), {
+          timeoutMs: delivery.waitForPlayerMs,
+          signal,
+          message: teleport ? 'player did not accept the teleport request in time' : 'player did not come close enough to receive the kit'
+        });
+      } catch (e) {
+        if (!(e instanceof DeliveryError) || e.retryable) throw e;
+        throw new DeliveryError(e.message, {
+          playerMessage: teleport
+            ? 'You did not accept my teleport request in time, so your order was cancelled. It did not count against your limits.'
+            : 'You did not come to the bot in time, so your order was cancelled. It did not count against your limits.'
+        });
+      }
 
       await tossAndConfirm(request, kit.retrieval.items, delivery, ctx);
       return { outcome: 'delivered' };
     } catch (e) {
-      // Put untouched kit items back so stock is not lost (only before handoff).
-      if (delivery.returnUndelivered && !(signal && signal.aborted)) {
+      // Put untouched kit items back so stock is not lost (only before handoff,
+      // and only when the chest is within walking distance).
+      if (isFarFromHome()) {
+        const held = inventoryItems().filter((it) => kit.retrieval.items.some((spec) => itemMatches(it, spec)));
+        if (held.length) await logger.warn('kit.return', `The bot is away from base holding ${held.length} ${kitName} kit stack(s); they may be lost when it returns.`);
+      } else if (delivery.returnUndelivered && !(signal && signal.aborted)) {
         try {
           await returnItems(kitName, kit, signal);
         } catch (err) {
@@ -353,14 +400,14 @@ function createKitService({ getBot, getSettings, logger, sendCommand, onChatLine
       }
       throw e;
     } finally {
-      if (delivery.method === 'teleport' && delivery.afterCommands.length && !(signal && signal.aborted)) {
+      if (delivery.afterCommands.length && !(signal && signal.aborted)) {
         for (const cmd of delivery.afterCommands) await sendCommand(cmd.replace(/\{player\}/g, request.mc_username)).catch(() => {});
       }
       if (!(signal && signal.aborted)) await goHome(signal);
     }
   }
 
-  return { deliver, goHome };
+  return { deliver, goHome, isReturning: () => returning };
 }
 
 module.exports = {

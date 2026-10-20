@@ -91,15 +91,22 @@ const DEFAULTS = {
     allowParkour: false,
     allowSprinting: true,
     arriveRadius: 1,
-    defaultTimeoutMs: 60000
+    defaultTimeoutMs: 60000,
+    // Too far to walk home (e.g. after teleporting to a player): run these
+    // commands, e.g. "/kill" to respawn at the bed next to the base.
+    farFromHomeBlocks: 32,
+    returnCommands: ['/kill'],
+    respawnWaitMs: 20000
   },
+  // Default: the bot sends /tpa to the player, who accepts with /tpaccept.
+  // "drop" instead: the bot waits at delivery.dropoff (default: home).
   delivery: {
-    method: 'drop',
+    method: 'teleport',
     dropoff: null,
-    commands: [],
+    commands: ['/tpa {player}'],
     acceptRequest: null,
     afterCommands: [],
-    instructions: 'Your {kit} kit is on its way.',
+    instructions: 'Your {kit} kit is ready! Accept my teleport request (/tpaccept) within 60 seconds to receive it.',
     playerRadius: 4,
     waitForPlayerMs: 60000,
     pickupTimeoutMs: 15000,

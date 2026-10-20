@@ -7,6 +7,7 @@ const { Vec3 } = require('vec3');
 const kits = require('../src/kits');
 const { createQueue } = require('../src/queue');
 const limits = require('../src/limits');
+const { deepMerge } = require('../src/config');
 const { testSettings, sqliteDb, fakeLogger } = require('./helpers');
 
 const close = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} != ${b}`);
@@ -55,6 +56,7 @@ function fakeWorld({ stock = 1, pickup = 'target' } = {}) {
   const inventory = [];
   let nextId = 100;
   bot.username = 'KitBot';
+  bot.health = 20;
   bot.entity = { id: 1, position: new Vec3(0, 64, 0) };
   bot.registry = { itemsByName: { white_shulker_box: { stackSize: 1 } } };
   bot.inventory = { items: () => inventory.filter((i) => i.count > 0), emptySlotCount: () => 30 };
@@ -101,7 +103,8 @@ function fakeWorld({ stock = 1, pickup = 'target' } = {}) {
 }
 
 async function runDelivery(world, settingsOverride = {}) {
-  const s = testSettings({ delivery: { pickupTimeoutMs: 300, waitForPlayerMs: 300 }, ...settingsOverride });
+  const s = testSettings(deepMerge({ delivery: { pickupTimeoutMs: 300, waitForPlayerMs: 300 }, navigation: { respawnWaitMs: 300 } }, settingsOverride));
+  world.commands = [];
   const db = await sqliteDb();
   const logger = fakeLogger();
   const notices = [];
@@ -109,7 +112,10 @@ async function runDelivery(world, settingsOverride = {}) {
     getBot: () => world.bot,
     getSettings: () => s,
     logger,
-    sendCommand: async () => {},
+    sendCommand: async (cmd) => {
+      world.commands.push(cmd);
+      if (world.onCommand) world.onCommand(cmd);
+    },
     onChatLine: () => () => {},
     pathfinderLib: world.fakePathfinder
   });
@@ -167,4 +173,65 @@ test('simulated delivery: player never arrives -> failed, items returned to the 
   assert.equal(row.status, 'failed');
   assert.equal(world.inventory.filter((i) => i.count > 0).length, 0, 'kit put back');
   assert.equal(world.chestItems.filter((i) => i.count > 0).length, 1);
+});
+
+// ---- teleport delivery -------------------------------------------------------
+
+const TELEPORT = { delivery: { method: 'teleport', commands: ['/tpa {player}'] } };
+
+function farPlayerWorld({ accepts = true, pickup = 'target', killWorks = true } = {}) {
+  const world = fakeWorld({ pickup });
+  const target = world.bot.players.Alice.entity;
+  // The player stays far from the base; walking never brings the bot near them.
+  world.bot.pathfinder.goto = async (goal) => {
+    world.bot.entity.position = new Vec3(goal.x, goal.y, goal.z);
+  };
+  target.position = new Vec3(5000, 70, -3000);
+  world.onCommand = (cmd) => {
+    if (cmd === '/tpa Alice' && accepts) setTimeout(() => (world.bot.entity.position = target.position.offset(1, 0, 0)), 20);
+    if (cmd === '/kill' && killWorks) setTimeout(() => (world.bot.entity.position = new Vec3(1, 64, 1)), 20); // bed next to home
+  };
+  return world;
+}
+
+test('teleport delivery: /tpa to the player, toss, /kill back to base, walk home', async () => {
+  const world = farPlayerWorld();
+  const { row, notices } = await runDelivery(world, TELEPORT);
+  assert.equal(row.status, 'delivered');
+  assert.deepEqual(world.commands, ['/tpa Alice', '/kill']);
+  assert.deepEqual(world.bot.entity.position, new Vec3(0, 64, 0), 'back on the home block');
+  assert.match(notices.at(-1), /delivered/);
+});
+
+test('teleport delivery: request not accepted -> kit back in the chest, refunded, no /kill', async () => {
+  const world = farPlayerWorld({ accepts: false });
+  const { row, notices } = await runDelivery(world, TELEPORT);
+  assert.equal(row.status, 'failed');
+  assert.match(row.error, /did not accept the teleport request/);
+  assert.match(notices.at(-1), /did not accept my teleport request in time/);
+  assert.deepEqual(world.commands, ['/tpa Alice'], 'still at base, so no /kill');
+  assert.equal(world.chestItems.filter((i) => i.count > 0).length, 1, 'kit returned to the chest');
+});
+
+test('teleport delivery: kit thrown but not picked up -> unconfirmed, still returns to base', async () => {
+  const world = farPlayerWorld({ pickup: 'none' });
+  const { row } = await runDelivery(world, TELEPORT);
+  assert.equal(row.status, 'unconfirmed');
+  assert.deepEqual(world.commands, ['/tpa Alice', '/kill']);
+});
+
+test('a bot stranded away from base returns before fetching the next kit', async () => {
+  const world = farPlayerWorld();
+  world.bot.entity.position = new Vec3(9000, 64, 9000);
+  const { row } = await runDelivery(world, TELEPORT);
+  assert.equal(row.status, 'delivered');
+  assert.deepEqual(world.commands, ['/kill', '/tpa Alice', '/kill']);
+});
+
+test('if /kill does not bring the bot back, the order fails safely and an error is logged', async () => {
+  const world = farPlayerWorld({ killWorks: false });
+  world.bot.entity.position = new Vec3(9000, 64, 9000);
+  const { row } = await runDelivery(world, TELEPORT);
+  assert.equal(row.status, 'failed');
+  assert.match(row.error, /away from its base/);
 });

@@ -70,15 +70,22 @@
     "allowParkour": false,
     "allowSprinting": true,
     "arriveRadius": 1,
-    "defaultTimeoutMs": 60000
+    "defaultTimeoutMs": 60000,
+    "farFromHomeBlocks": 32,
+    "returnCommands": [
+      "/kill"
+    ],
+    "respawnWaitMs": 20000
   },
   "delivery": {
-    "method": "drop",
+    "method": "teleport",
     "dropoff": null,
-    "commands": [],
+    "commands": [
+      "/tpa {player}"
+    ],
     "acceptRequest": null,
     "afterCommands": [],
-    "instructions": "Your {kit} kit is ready. Come to the bot to receive it.",
+    "instructions": "Your {kit} kit is ready! Accept my teleport request (/tpaccept) within 60 seconds to receive it.",
     "playerRadius": 4,
     "waitForPlayerMs": 60000,
     "pickupTimeoutMs": 15000,

@@ -281,7 +281,10 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
       handleChat(parsed.username, parsed.message).catch((e) => logger.error('request.error', `Error handling a command from ${parsed.username}: ${e.message}`));
     });
 
-    current.on('death', () => logger.warn('minecraft.death', 'The bot died.'));
+    current.on('death', () => {
+      if (kitService.isReturning()) logger.debug('minecraft.death', 'Respawning to return to base.');
+      else logger.warn('minecraft.death', 'The bot died.');
+    });
 
     current.on('kicked', (reason) => {
       const text = typeof reason === 'string' ? reason : JSON.stringify(reason);

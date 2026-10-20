@@ -25,7 +25,7 @@ Repository → **Settings → Secrets and variables → Actions → New reposito
 
 **3. Kit station in Minecraft (10 min)**
 1. Join 1b1t.cc with your own launcher **as `VoidClanKitBot`** and log in (`/log <password>`, or `/reg <password> <password>` the very first time).
-2. Go to your base and sleep in a bed there, so the bot respawns there if it dies.
+2. Go to your base and **sleep in a bed within about 30 blocks of the bot's spot**, with a clear walking path. After each delivery, the bot uses `/kill` to get back from the player, respawns at this bed and walks back to its spot.
 3. Stand on the block where the bot should live and **face north, south, east or west**. Place:
    - the **totem** chest 1–6 blocks to your **left**,
    - the **pvp** chest 1–6 blocks to your **right**,
@@ -40,7 +40,7 @@ Repository → **Settings → Secrets and variables → Actions → New reposito
 
 When the bot logs in, it detects the three chests and reports in `#kitbot-logs`. If a chest is not found, the message says which one. Fix it in game and run `/kitbot recalibrate`. A run lasts up to 340 minutes; start it again for another session.
 
-Players then use `/link minecraft_username:<name>` in Discord, whisper `!link <code>` to VoidClanKitBot, and type `!kit totem`, `!kit pvp` or `!kit grief`. Players receive the kit standing next to the bot, so the default drop-off point is the bot's home spot. To use a different drop-off point or `/tpa`, see [§6](#6-configure-the-totem-pvp-and-grief-kit-locations).
+Players then use `/link minecraft_username:<name>` in Discord, whisper `!link <code>` to VoidClanKitBot, and type `!kit totem`, `!kit pvp` or `!kit grief`. The bot takes the kit from the chest, sends the player `/tpa`, and the player accepts with `/tpaccept` within 60 seconds. The bot appears next to them, throws the kit, then uses `/kill` to respawn at its bed and walks back to its spot. Players never need to come to your base. If the player does not accept in time, the bot has not left the base, so the kit goes back in the chest and the order does not count. Other delivery options are in [§6](#6-configure-the-totem-pvp-and-grief-kit-locations).
 
 **Optional secrets** (only to change a default): `MINECRAFT_HOST`, `MINECRAFT_PORT`, `MINECRAFT_USERNAME`, `MINECRAFT_PASSWORD`, `MINECRAFT_AUTH`, `DISCORD_GUILD_ID` (needed only if the bot is in several servers), `DISCORD_LOG_CHANNEL_ID`, `DISCORD_ADMIN_IDS`, `DATABASE_URL`, `KITBOT_CONFIG_JSON`. The detailed installation guide below explains each one.
 
@@ -89,7 +89,7 @@ Players then use `/link minecraft_username:<name>` in Discord, whisper `!link <c
 | `src/membership.js` | Live Discord membership check (REST) |
 | `src/discord.js` / `src/admin.js` | Slash commands, confirmations, admin actions, log channel |
 | `scripts/` | Config validator, syntax check, bounded supervisor for GitHub Actions |
-| `test/` | 117 automated tests (see [§8](#8-run-the-tests)) |
+| `test/` | 123 automated tests (see [§8](#8-run-the-tests)) |
 
 ---
 
@@ -212,7 +212,7 @@ Paste the output as `KITBOT_CONFIG_JSON`. Update the secret whenever you change 
 ### 6. Configure the TOTEM, PVP and GRIEF kit locations
 Build the station in game: a spot where the bot stands ("home"), with the **totem** chest to its **left**, the **pvp** chest to its **right**, and the **grief** chest **behind** it.
 
-**Automatic (default):** park the bot account on the home block, facing north, south, east or west, and log out. On its next login, the bot reads its own position and facing, then looks along each direction (up to `navigation.scanDistance` = 6 blocks, at foot level, one up or one down) for the first chest, barrel or shulker box. The result is stored and reused on later logins. The log channel reports what was found (without coordinates). `/kitbot recalibrate` repeats the detection from where the bot stands. The drop-off point defaults to the home block. Kit requests are refused until all three chests are found.
+**Automatic (default):** park the bot account on the home block, facing north, south, east or west, and log out. On its next login, the bot reads its own position and facing, then looks along each direction (up to `navigation.scanDistance` = 6 blocks, at foot level, one up or one down) for the first chest, barrel or shulker box. The result is stored and reused on later logins. The log channel reports what was found (without coordinates). `/kitbot recalibrate` repeats the detection from where the bot stands. Kit requests are refused until all three chests are found.
 
 **Manual:** to give exact coordinates instead (or a separate drop-off point), edit `config.json`:
 
@@ -231,13 +231,14 @@ Build the station in game: a spot where the bot stands ("home"), with the **tote
 3. For each kit, look at its chest. F3 shows `Targeted Block: X Y Z`. Put that in `retrieval.container`. It must be within 4.5 blocks of where the bot stands.
 4. List what one kit contains in `retrieval.items`. With the default `{ "nameRegex": "shulker_box$", "count": 1 }`, the bot takes **one shulker box of any colour** per delivery, so fill each chest with pre-filled shulker boxes. For loose items use exact names, for example `{ "name": "totem_of_undying", "count": 4 }`.
 5. Choose the **delivery method**. It depends on your server, so test it in game:
-   - `"drop"` (default, needs no plugin): the bot walks to `delivery.dropoff`, waits up to 60 seconds for the player to come within 4 blocks, tosses the kit and waits for the pickup. Players must reach the drop-off point, so tell them where it is (or use a public spot).
-   - `"teleport"`: only if the server has a working teleport-request plugin. For example, the bot teleports to the player:
+   - `"teleport"` (default): the bot runs `/tpa {player}` and waits up to 60 seconds (`waitForPlayerMs`) until it is within 4 blocks of the player, which happens once the player types `/tpaccept`. It then tosses the kit and waits for the pickup. To get back, when the bot is more than `navigation.farFromHomeBlocks` (32) from home, it runs `navigation.returnCommands` (default `["/kill"]`), waits up to 20 seconds to respawn near home, then walks to the home block. Its **bed must be near the base**. Before every order, the bot also checks that it is at its base and returns first if needed. If the server uses another command (for example `/home base`), set it:
      ```json
-     "delivery": { "method": "teleport", "commands": ["/tpa {player}"], "afterCommands": [],
-                   "instructions": "Accept my teleport request to receive your {kit} kit." }
+     "navigation": { "returnCommands": ["/home base"] },
+     "delivery": { "method": "teleport", "commands": ["/tpa {player}"],
+                   "instructions": "Your {kit} kit is ready! Accept my teleport request (/tpaccept) within 60 seconds." }
      ```
-     Or the player teleports to the bot. The player is asked to `/tpa` to the bot, and the bot accepts when it sees the request message (match it to the server's exact text):
+   - `"drop"` (needs no plugin): the bot walks to `delivery.dropoff` (default: home), waits up to 60 seconds for the player to come within 4 blocks, tosses the kit and waits for the pickup. Players must come to that point.
+   - Or the player teleports to the bot. The player is asked to `/tpa` to the bot, and the bot accepts when it sees the request message (match it to the server's exact text):
      ```json
      "delivery": { "method": "teleport", "acceptRequest": { "pattern": "^(?<username>\\w{1,16}) has requested to teleport to you", "command": "/tpaccept {player}" },
                    "instructions": "Type /tpa <BotName> now to receive your {kit} kit." }
@@ -258,7 +259,7 @@ Build the station in game: a spot where the bot stands ("home"), with the **tote
 npm ci
 npm run check                    # syntax check
 npm run validate-config:example  # example settings structure
-npm test                         # 117 tests, about 2–3 minutes
+npm test                         # 123 tests, about 2–3 minutes
 ```
 The tests cover cooldowns (shared across kits), the rolling quota, refunds, the global 2-per-minute limit, one-pending-request races, restart persistence, linking (single-use codes, takeover protection, 30-day changes, history), access revocation when a member leaves, fail-closed Discord outages, admin permissions (non-admins, other guilds, forged confirmations), the guarantee that failed or unconfirmed deliveries are never reported as successful, secret redaction, and a real-protocol run against a fake 1.21.11 server. The `ci.yml` workflow runs all of this on every push.
 
@@ -372,7 +373,8 @@ These need your accounts or your hands in the game. Everything else has a defaul
 | `navigation.autoDetect` / `scanDistance` | `true` / `6` | Detect home and chests around the bot when `home` is unset |
 | `navigation.home` | auto | `{x, y, z, facing}` |
 | `navigation.allowDigging` / `allowPlacing` / `allowParkour` | `false` | Movement permissions |
-| `delivery.*` | `drop` | Default delivery. Override per kit with `kits.<name>.delivery` |
+| `delivery.*` | `teleport` with `/tpa {player}` | Default delivery. Override per kit with `kits.<name>.delivery` |
+| `navigation.returnCommands` / `farFromHomeBlocks` / `respawnWaitMs` | `["/kill"]` / `32` / `20000` | How the bot gets back to base when it is too far to walk |
 | `kits.<name>` | — | `direction`, `distance` or `standAt`, `timeoutMs`, `retrieval{method, container, items}` |
 | `logging.retentionDays` / `consoleLevel` | `30` / `INFO` | Event retention; console verbosity (`DEBUG` shows chat lines) |
 
