@@ -25,7 +25,16 @@ async function main() {
   await logger.info('bot.startup', `KitBot starting (role: ${role}, storage: ${db.dialect}, Minecraft ${config.secrets.minecraft.version}).`);
 
   // Fill in the Discord server, log channel and admins when not configured.
-  const discordCtx = await resolveDiscordContext({ ...config.secrets.discord });
+  let lastHint = 0;
+  const discordCtx = await resolveDiscordContext({
+    ...config.secrets.discord,
+    waitForInviteMs: 15 * 60000,
+    onWaiting: async (invite) => {
+      if (Date.now() - lastHint < 60000) return;
+      lastHint = Date.now();
+      await logger.warn('discord.setup', `The Discord bot is not in any server yet. Open this link to add it (waiting up to 15 minutes): ${invite}`);
+    }
+  });
   Object.assign(config.secrets.discord, { guildId: discordCtx.guildId, logChannelId: discordCtx.logChannelId, adminIds: discordCtx.adminIds });
   for (const note of discordCtx.notes) await logger.info('discord.setup', note);
 
@@ -80,5 +89,6 @@ async function main() {
 main().catch((e) => {
   const redact = createRedactor(secretValues(loadSecrets(process.env)));
   console.error(`[${new Date().toISOString()}] FATAL ${redact(e.message)}`);
-  process.exit(1);
+  // Exit code 2: setup problem (configuration, secrets, invite). Restarting will not help.
+  process.exit(2);
 });

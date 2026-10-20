@@ -30,7 +30,20 @@ async function withRetries(fn, attempts = 3, delayMs = 5000) {
   }
 }
 
-async function resolveDiscordContext({ token, guildId = '', logChannelId = '', adminIds = [], logChannelName = 'kitbot-logs', rest = null, retryDelayMs = 5000 }) {
+// waitForInviteMs: when the bot is in no server yet, keep checking for that
+// long (calling onWaiting with the invite link) instead of failing at once.
+async function resolveDiscordContext({
+  token,
+  guildId = '',
+  logChannelId = '',
+  adminIds = [],
+  logChannelName = 'kitbot-logs',
+  rest = null,
+  retryDelayMs = 5000,
+  waitForInviteMs = 0,
+  pollMs = 15000,
+  onWaiting = () => {}
+}) {
   const api = rest || new REST({ version: '10', timeout: 15000 }).setToken(token);
   const call = (fn) => withRetries(fn, 3, retryDelayMs);
   const notes = [];
@@ -45,7 +58,13 @@ async function resolveDiscordContext({ token, guildId = '', logChannelId = '', a
   const invite = inviteUrl(me.id);
 
   if (!guildId) {
-    const guilds = await call(() => api.get(Routes.userGuilds()));
+    let guilds = await call(() => api.get(Routes.userGuilds()));
+    const deadline = Date.now() + waitForInviteMs;
+    while (guilds.length === 0 && Date.now() < deadline) {
+      await onWaiting(invite);
+      await new Promise((r) => setTimeout(r, pollMs));
+      guilds = await call(() => api.get(Routes.userGuilds()));
+    }
     if (guilds.length === 0) throw new Error(`The Discord bot is not in any server yet. Invite it with: ${invite}`);
     if (guilds.length > 1) throw new Error(`The Discord bot is in ${guilds.length} servers; set DISCORD_GUILD_ID to choose one.`);
     guildId = guilds[0].id;

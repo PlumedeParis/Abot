@@ -27,8 +27,8 @@ function run() {
       log(`bot exited (${signal || code}); run finished`);
       process.exit(0);
     }
-    if (code === 1 && restarts === 0 && Date.now() - startedAt < 15000) {
-      log('bot failed during startup (check configuration and secrets); not restarting');
+    if (code === 2) {
+      log('bot stopped because of a setup problem (see the FATAL line above); not restarting');
       process.exit(1);
     }
     if (restarts >= maxRestarts) {
@@ -54,7 +54,6 @@ function stop(reason) {
   }, 100000).unref();
 }
 
-const startedAt = Date.now();
 log(`running the bot for up to ${minutes} minutes`);
 setTimeout(() => stop('time limit reached'), deadline - Date.now());
 process.on('SIGTERM', () => stop('SIGTERM'));

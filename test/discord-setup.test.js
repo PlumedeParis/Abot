@@ -66,3 +66,18 @@ test('invalid token is reported as such', async () => {
   };
   await assert.rejects(resolveDiscordContext({ token: 'bad', rest }), /DISCORD_TOKEN is invalid/);
 });
+
+test('waits for the bot to be invited instead of failing at once', async () => {
+  let calls = 0;
+  const rest = fakeRest();
+  const base = rest.get;
+  rest.get = async (route) => {
+    if (route === '/users/@me/guilds' && calls++ < 2) return [];
+    return base(route);
+  };
+  const hints = [];
+  const ctx = await resolveDiscordContext({ token: 'x', rest, waitForInviteMs: 5000, pollMs: 10, onWaiting: (url) => hints.push(url) });
+  assert.equal(ctx.guildId, GUILD);
+  assert.equal(hints.length, 2);
+  assert.match(hints[0], /client_id=100000000000000001/);
+});
