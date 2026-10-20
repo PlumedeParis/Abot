@@ -293,6 +293,53 @@ function createKitService({ getBot, getSettings, logger, sendCommand, onChatLine
     }
   }
 
+  // What is around the bot right after it teleported to a player. Sent to the
+  // Discord log channel only (coordinates never go to the console).
+  function surroundings(radius = 16) {
+    const bot = getBot();
+    const pos = bot.entity.position;
+    const blocks = { chest: 0, trapped_chest: 0, barrel: 0, shulker_box: 0, ender_chest: 0 };
+    if (typeof bot.findBlocks === 'function' && bot.registry && bot.registry.blocksArray) {
+      const ids = bot.registry.blocksArray.filter((b) => /^(chest|trapped_chest|barrel|ender_chest)$|shulker_box$/.test(b.name)).map((b) => b.id);
+      for (const p of bot.findBlocks({ matching: ids, maxDistance: radius, count: 5000 })) {
+        const block = bot.blockAt(p);
+        if (!block) continue;
+        const key = /shulker_box$/.test(block.name) ? 'shulker_box' : block.name;
+        if (key in blocks) blocks[key]++;
+      }
+    }
+    let droppedShulkers = 0;
+    const players = [];
+    for (const e of Object.values(bot.entities || {})) {
+      if (!e || e === bot.entity || !e.position || e.position.distanceTo(pos) > radius) continue;
+      if (e.type === 'player' && e.username) players.push(e.username);
+      else if (e.name === 'item' && typeof e.getDroppedItem === 'function') {
+        const item = e.getDroppedItem();
+        if (item && /shulker_box$/.test(item.name)) droppedShulkers += item.count;
+      }
+    }
+    const dim = bot.game && bot.game.dimension ? String(bot.game.dimension).replace(/^minecraft:/, '') : 'unknown';
+    return { x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z), dimension: dim, blocks, droppedShulkers, players };
+  }
+
+  async function reportTeleport(request) {
+    try {
+      const r = surroundings();
+      const others = r.players.filter((p) => p !== request.mc_username && p !== getBot().username);
+      const details = [
+        `🕒 <t:${Math.floor(Date.now() / 1000)}:F>`,
+        `📦 Kit: **${request.kit}** for **${request.mc_username}** (request #${request.id})`,
+        `📍 **${r.x} ${r.y} ${r.z}** (${r.dimension})`,
+        `🗄️ Within 16 blocks: ${r.blocks.chest} chest(s), ${r.blocks.trapped_chest} trapped chest(s), ${r.blocks.barrel} barrel(s), ${r.blocks.shulker_box} shulker box(es) placed, ${r.blocks.ender_chest} ender chest(s)`,
+        `🟪 Shulker boxes on the ground: ${r.droppedShulkers}`,
+        `👥 Other players nearby: ${others.length ? others.join(', ') : 'none'}`
+      ].join('\n');
+      await logger.info('delivery.teleported', `Teleported to ${request.mc_username} for a ${request.kit} kit.`, undefined, details);
+    } catch (e) {
+      await logger.debug('delivery.teleported', `Could not build the location report: ${e.message}`);
+    }
+  }
+
   function distanceFromHome() {
     const home = getSettings().navigation.home;
     if (!home) return 0;
@@ -383,6 +430,7 @@ function createKitService({ getBot, getSettings, logger, sendCommand, onChatLine
         });
       }
 
+      if (teleport) await reportTeleport(request);
       await tossAndConfirm(request, kit.retrieval.items, delivery, ctx);
       return { outcome: 'delivered' };
     } catch (e) {

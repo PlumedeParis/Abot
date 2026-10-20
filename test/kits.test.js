@@ -102,11 +102,13 @@ function fakeWorld({ stock = 1, pickup = 'target' } = {}) {
   return { bot, inventory, chestItems, fakePathfinder };
 }
 
+let lastLogger = null;
 async function runDelivery(world, settingsOverride = {}) {
   const s = testSettings(deepMerge({ delivery: { pickupTimeoutMs: 300, waitForPlayerMs: 300 }, navigation: { respawnWaitMs: 300 } }, settingsOverride));
   world.commands = [];
   const db = await sqliteDb();
   const logger = fakeLogger();
+  lastLogger = logger;
   const notices = [];
   const service = kits.createKitService({
     getBot: () => world.bot,
@@ -234,4 +236,32 @@ test('if /kill does not bring the bot back, the order fails safely and an error 
   const { row } = await runDelivery(world, TELEPORT);
   assert.equal(row.status, 'failed');
   assert.match(row.error, /away from its base/);
+});
+
+test('teleport delivery posts a location report (Discord only) with nearby containers', async () => {
+  const world = farPlayerWorld();
+  const bot = world.bot;
+  bot.game = { dimension: 'minecraft:the_nether' };
+  bot.registry.blocksArray = [
+    { id: 1, name: 'chest' },
+    { id: 2, name: 'red_shulker_box' },
+    { id: 3, name: 'barrel' }
+  ];
+  const placed = { '5001,70,-3000': 'chest', '5002,70,-3000': 'chest', '5003,71,-3000': 'red_shulker_box' };
+  bot.findBlocks = () => Object.keys(placed).map((k) => new Vec3(...k.split(',').map(Number)));
+  bot.blockAt = (v) => ({ name: placed[`${v.x},${v.y},${v.z}`] || 'chest', position: v });
+  bot.entities = {
+    9: { id: 9, type: 'player', username: 'Bob', position: new Vec3(5004, 70, -3000) },
+    10: { id: 10, name: 'item', position: new Vec3(5001, 70, -2999), getDroppedItem: () => ({ name: 'blue_shulker_box', count: 2 }) }
+  };
+  const { row } = await runDelivery(world, TELEPORT);
+  assert.equal(row.status, 'delivered');
+  const evt = lastLogger.events.find((e) => e.type === 'delivery.teleported');
+  assert.ok(evt, 'report logged');
+  assert.ok(!/5001|-3000/.test(evt.message), 'no coordinates in the console part');
+  assert.match(evt.details, /\*\*5001 70 -3000\*\* \(the_nether\)/);
+  assert.match(evt.details, /2 chest\(s\).*1 shulker box\(es\) placed/);
+  assert.match(evt.details, /on the ground: 2/);
+  assert.match(evt.details, /Other players nearby: Bob/);
+  assert.match(evt.details, /Kit: \*\*totem\*\* for \*\*Alice\*\*/);
 });

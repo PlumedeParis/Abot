@@ -394,17 +394,36 @@ function createDiscordBot({ config, db, logger, checkMembership, onSettingsReloa
     flushLogs().catch(() => {});
   });
 
+  // Discord regularly asks bots to reconnect; that takes about a second and is
+  // normal. Only an outage longer than a minute is reported.
+  let outageStart = null;
+  let outageTimer = null;
+  let outageReported = false;
+  function connectionLost(what) {
+    logger.debug('discord.reconnecting', what);
+    if (outageStart) return;
+    outageStart = Date.now();
+    outageTimer = setTimeout(() => {
+      outageReported = true;
+      logger.warn('discord.disconnected', 'Lost the connection to Discord for more than a minute; reconnecting.');
+    }, 60000);
+  }
+  function connectionBack() {
+    connected = true;
+    clearTimeout(outageTimer);
+    if (outageReported) logger.info('discord.resumed', `Discord connection restored after ${Math.round((Date.now() - outageStart) / 1000)}s.`);
+    else if (outageStart) logger.debug('discord.resumed', 'Discord connection resumed.');
+    outageStart = null;
+    outageReported = false;
+  }
   client.on(Events.ShardDisconnect, () => {
     connected = false;
-    logger.warn('discord.disconnected', 'Discord gateway disconnected.');
+    connectionLost('Discord gateway disconnected.');
   });
-  client.on(Events.ShardReconnecting, () => logger.warn('discord.reconnecting', 'Reconnecting to the Discord gateway.'));
-  client.on(Events.ShardResume, () => {
-    connected = true;
-    logger.info('discord.resumed', 'Discord gateway connection resumed.');
-  });
+  client.on(Events.ShardReconnecting, () => connectionLost('Reconnecting to the Discord gateway.'));
+  client.on(Events.ShardResume, connectionBack);
   client.on(Events.ShardReady, () => {
-    if (client.isReady()) connected = true;
+    if (client.isReady()) connectionBack();
   });
   client.on(Events.Error, (e) => logger.error('discord.error', `Discord client error: ${e.message}`));
 

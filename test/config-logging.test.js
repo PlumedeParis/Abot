@@ -121,3 +121,15 @@ test('outgoing chat is sanitised', () => {
   assert.equal(fill('/msg {player} {message}', { player: 'Alice', message: 'hello' }), '/msg Alice hello');
   assert.equal(fill('/reg {password} {password}', { password: 'pw' }), '/reg pw pw');
 });
+
+test('private details (coordinates) reach the log channel but never the console', async () => {
+  const db = await sqliteDb();
+  const lines = [];
+  const out = { log: (l) => lines.push(l), warn: (l) => lines.push(l), error: (l) => lines.push(l) };
+  const logger = createLogger({ db, out });
+  await logger.info('delivery.teleported', 'Teleported to Alice.', undefined, 'XYZ 1234 70 -5678');
+  assert.ok(lines.every((l) => !l.includes('1234')));
+  assert.match(lines[0], /details in the Discord log channel/);
+  const [evt] = await fetchUnsentEvents(db);
+  assert.match(evt.message, /Teleported to Alice\.\nXYZ 1234 70 -5678/);
+});

@@ -89,7 +89,7 @@ Players then use `/link minecraft_username:<name>` in Discord, whisper `!link <c
 | `src/membership.js` | Live Discord membership check (REST) |
 | `src/discord.js` / `src/admin.js` | Slash commands, confirmations, admin actions, log channel |
 | `scripts/` | Config validator, syntax check, bounded supervisor for GitHub Actions |
-| `test/` | 123 automated tests (see [§8](#8-run-the-tests)) |
+| `test/` | 126 automated tests (see [§8](#8-run-the-tests)) |
 
 ---
 
@@ -259,7 +259,7 @@ Build the station in game: a spot where the bot stands ("home"), with the **tote
 npm ci
 npm run check                    # syntax check
 npm run validate-config:example  # example settings structure
-npm test                         # 123 tests, about 2–3 minutes
+npm test                         # 126 tests, about 2–3 minutes
 ```
 The tests cover cooldowns (shared across kits), the rolling quota, refunds, the global 2-per-minute limit, one-pending-request races, restart persistence, linking (single-use codes, takeover protection, 30-day changes, history), access revocation when a member leaves, fail-closed Discord outages, admin permissions (non-admins, other guilds, forged confirmations), the guarantee that failed or unconfirmed deliveries are never reported as successful, secret redaction, and a real-protocol run against a fake 1.21.11 server. The `ci.yml` workflow runs all of this on every push.
 
@@ -282,6 +282,8 @@ Stop the bot with Ctrl+C or SIGTERM (or cancel the workflow). It finishes or abo
 - **systemd:** `journalctl -u kitbot -f`. **Docker:** `docker compose logs -f kitbot`.
 
 Tokens, passwords, database credentials and `/reg` / `/log` arguments are redacted from every log line.
+
+**Teleport report:** each time the bot teleports to a player, `#kitbot-logs` gets the time, the player and kit, the coordinates and dimension, the number of chests, trapped chests, barrels, placed shulker boxes and ender chests within 16 blocks, shulker boxes lying on the ground, and other players nearby. Coordinates are sent **only** to Discord. The console and GitHub run log just say "Teleported to <player>". Routine Discord reconnects (about one second) are not posted; only an outage longer than a minute is.
 
 ### 11. Troubleshooting
 

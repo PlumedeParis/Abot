@@ -78,16 +78,19 @@ function createLogger({ db = null, secretValues = [], consoleLevel = 'INFO', sou
     }
   }
 
-  function log(level, type, message, data) {
+  // `details` (e.g. coordinates) go to the database and the Discord log channel
+  // only, never to the console, whose output may be public (GitHub Actions logs).
+  function log(level, type, message, data, details) {
     const evt = {
       level,
       type,
-      message: redact(String(message)).slice(0, 1800),
+      message: redact(details ? `${message}\n${details}` : String(message)).slice(0, 3800),
       data: data === undefined ? null : redact(JSON.stringify(data, (k, v) => (v instanceof Error ? errorInfo(v) : v))).slice(0, 3000),
       createdAt: Date.now()
     };
     if (LEVELS[level] >= minConsole) {
-      const line = `[${new Date(evt.createdAt).toISOString()}] ${level.padEnd(7)} ${source}:${type} ${evt.message}${evt.data ? ` ${evt.data}` : ''}`;
+      const shown = details ? `${redact(String(message))} (details in the Discord log channel)` : evt.message;
+      const line = `[${new Date(evt.createdAt).toISOString()}] ${level.padEnd(7)} ${source}:${type} ${shown}${evt.data ? ` ${evt.data}` : ''}`;
       (level === 'ERROR' ? out.error : level === 'WARNING' ? out.warn : out.log).call(out, line);
     }
     if (level === 'DEBUG') return Promise.resolve();
@@ -102,10 +105,10 @@ function createLogger({ db = null, secretValues = [], consoleLevel = 'INFO', sou
     },
     flushPending,
     debug: (type, msg, data) => log('DEBUG', type, msg, data),
-    info: (type, msg, data) => log('INFO', type, msg, data),
-    warn: (type, msg, data) => log('WARNING', type, msg, data),
-    error: (type, msg, data) => log('ERROR', type, msg, data),
-    admin: (type, msg, data) => log('ADMIN', type, msg, data),
+    info: (type, msg, data, details) => log('INFO', type, msg, data, details),
+    warn: (type, msg, data, details) => log('WARNING', type, msg, data, details),
+    error: (type, msg, data, details) => log('ERROR', type, msg, data, details),
+    admin: (type, msg, data, details) => log('ADMIN', type, msg, data, details),
     child(childSource) {
       return createLogger({ db: database, secretValues, consoleLevel, source: childSource, out });
     }

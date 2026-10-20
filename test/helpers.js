@@ -47,8 +47,8 @@ const BACKENDS = [
 
 function fakeLogger() {
   const events = [];
-  const rec = (level) => async (type, message) => {
-    events.push({ level, type, message });
+  const rec = (level) => async (type, message, data, details) => {
+    events.push({ level, type, message, details });
   };
   return {
     events,

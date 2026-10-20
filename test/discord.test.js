@@ -147,3 +147,13 @@ test('/link issues a code bound to the requested username', async () => {
   const done = await linking.completeLink(db, { mcUsername: 'Newbie', code, settings: S, checkMembership: member, now: Date.now() });
   assert.equal(done.ok, true);
 });
+
+test('routine Discord reconnects are not posted to the log channel', async () => {
+  const { logger, bot } = await setup();
+  bot.client.emit(Events.ShardReconnecting, 0);
+  bot.client.emit(Events.ShardResume, 0, 1);
+  bot.client.emit(Events.ShardDisconnect, {}, 0);
+  bot.client.emit(Events.ShardResume, 0, 1);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(logger.events.filter((e) => e.level !== 'DEBUG').map((e) => e.type), []);
+});
