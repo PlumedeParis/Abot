@@ -259,7 +259,7 @@ function createDiscordBot({ config, db, logger, checkMembership, onSettingsReloa
         break;
       case 'recalibrate':
         await actions.recalibrate(admin);
-        embed.setTitle('Recalibration requested').setDescription('When idle, the bot looks for the totem chest on its LEFT, pvp on its RIGHT and grief BEHIND it, from where it stands now. The result appears in the log channel.');
+        embed.setTitle('Recalibration requested').setDescription('When idle, the bot looks for the totem chest on its LEFT, pvp on its RIGHT and grief IN FRONT of it, from where it stands now. The result appears in the log channel.');
         break;
       case 'reload': {
         const r = await actions.reload(admin);

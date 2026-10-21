@@ -81,7 +81,7 @@ const DEFAULTS = {
   },
   navigation: {
     // With autoDetect, an unset home is read from where the bot stands, and
-    // the kit chests are found to its left, right and behind (src/station.js).
+    // the kit chests are found to its left, right and in front (src/station.js).
     autoDetect: true,
     scanDistance: 6,
     home: null,
@@ -115,7 +115,7 @@ const DEFAULTS = {
   kits: {
     totem: { direction: 'left', distance: null, standAt: null, retrieval: { method: 'chest', container: null, items: [{ nameRegex: 'shulker_box$', count: 1 }] } },
     pvp: { direction: 'right', distance: null, standAt: null, retrieval: { method: 'chest', container: null, items: [{ nameRegex: 'shulker_box$', count: 1 }] } },
-    grief: { direction: 'backward', distance: null, standAt: null, retrieval: { method: 'chest', container: null, items: [{ nameRegex: 'shulker_box$', count: 1 }] } }
+    grief: { direction: 'forward', distance: null, standAt: null, retrieval: { method: 'chest', container: null, items: [{ nameRegex: 'shulker_box$', count: 1 }] } }
   },
   logging: {
     retentionDays: 30,

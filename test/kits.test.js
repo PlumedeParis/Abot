@@ -31,11 +31,11 @@ test('directions are relative to the bot orientation', () => {
   assert.deepEqual(kits.directionVector(east, 'backward'), { x: -1, z: 0 }); // west
 });
 
-test('default kit placement: totem LEFT, pvp RIGHT, grief BACKWARD', () => {
+test('default kit placement: totem LEFT, pvp RIGHT, grief IN FRONT', () => {
   const s = testSettings({ navigation: { home: { x: 100, y: 64, z: -200, facing: 'north' } } });
   assert.deepEqual(kits.resolveStandAt(s, 'totem'), { x: 97, y: 64, z: -200 });
   assert.deepEqual(kits.resolveStandAt(s, 'pvp'), { x: 103, y: 64, z: -200 });
-  assert.deepEqual(kits.resolveStandAt(s, 'grief'), { x: 100, y: 64, z: -197 });
+  assert.deepEqual(kits.resolveStandAt(s, 'grief'), { x: 100, y: 64, z: -203 });
   s.kits.pvp.standAt = { x: 1, y: 2, z: 3 };
   assert.deepEqual(kits.resolveStandAt(s, 'pvp'), { x: 1, y: 2, z: 3 });
 });

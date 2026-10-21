@@ -6,6 +6,9 @@ const { detectStation, applyStation, describeStation, facingFromYaw } = require(
 const { f3DegreesToYaw, resolveStandAt } = require('../src/kits');
 const { DEFAULTS, validateSettings, resolveDelivery, deepMerge } = require('../src/config');
 
+// Layout with grief BEHIND, to test the geometry independently of the defaults.
+const BEHIND = { ...DEFAULTS.kits, grief: { ...DEFAULTS.kits.grief, direction: 'backward' } };
+
 const world = (blocks) => (p) => {
   const name = blocks[`${p.x},${p.y},${p.z}`];
   return name ? { name } : { name: 'air' };
@@ -26,7 +29,7 @@ test('finds totem LEFT, pvp RIGHT and grief BEHIND relative to the facing', () =
     position: { x: 100.5, y: 64, z: 200.5 },
     yaw: f3DegreesToYaw(175),
     blockAt: world({ '97,64,200': 'chest', '102,65,200': 'barrel', '100,64,201': 'trapped_chest' }),
-    kits: DEFAULTS.kits
+    kits: BEHIND
   });
   assert.equal(r.ok, true);
   assert.deepEqual(r.home, { x: 100, y: 64, z: 200, facing: 'north' });
@@ -44,7 +47,7 @@ test('works for other facings (east)', () => {
     position: { x: 0.5, y: 70, z: 0.5 },
     yaw: f3DegreesToYaw(-90),
     blockAt: world({ '0,70,-2': 'chest', '0,70,2': 'chest', '-2,70,0': 'white_shulker_box' }),
-    kits: DEFAULTS.kits
+    kits: BEHIND
   });
   assert.equal(r.ok, true);
   assert.equal(r.home.facing, 'east');
@@ -58,7 +61,7 @@ test('reports which chests are missing and ignores non-containers', () => {
     position: { x: 0, y: 64, z: 0 },
     yaw: f3DegreesToYaw(180),
     blockAt: world({ '-3,64,0': 'chest', '3,64,0': 'chest_boat', '0,64,9': 'chest' }),
-    kits: DEFAULTS.kits,
+    kits: BEHIND,
     scanDistance: 6
   });
   assert.equal(r.ok, false);
@@ -70,9 +73,9 @@ test('applying a detected station makes the settings complete and valid', () => 
     position: { x: 100, y: 64, z: 200 },
     yaw: f3DegreesToYaw(180),
     blockAt: world({ '96,64,200': 'chest', '104,64,200': 'chest', '100,64,204': 'chest' }),
-    kits: DEFAULTS.kits
+    kits: BEHIND
   });
-  const s = applyStation(deepMerge(DEFAULTS, { server: { botsAllowedConfirmed: true } }), r);
+  const s = applyStation(deepMerge(DEFAULTS, { server: { botsAllowedConfirmed: true }, kits: BEHIND }), r);
   assert.deepEqual(validateSettings(s), []);
   assert.deepEqual(resolveStandAt(s, 'totem'), { x: 97, y: 64, z: 200 });
   assert.deepEqual(resolveDelivery(s, 'pvp').dropoff, { x: 100, y: 64, z: 200 }, 'drop-off defaults to home');
@@ -84,7 +87,7 @@ test('explicitly configured coordinates win over detection', () => {
     position: { x: 0, y: 64, z: 0 },
     yaw: f3DegreesToYaw(180),
     blockAt: world({ '-2,64,0': 'chest', '2,64,0': 'chest', '0,64,2': 'chest' }),
-    kits: DEFAULTS.kits
+    kits: BEHIND
   });
   assert.deepEqual(applyStation(configured, r).kits.pvp.retrieval.container, { x: 1, y: 2, z: 3 });
 });
@@ -93,7 +96,7 @@ test('the bot does not need to face the right way: the only matching orientation
   // Real layout facing north: totem west (-x), pvp east (+x), grief south (+z); nothing in front (north).
   const blocks = world({ '97,64,200': 'chest', '103,64,200': 'barrel', '100,64,203': 'chest' });
   for (const deg of [0, 90, -90]) {
-    const r = detectStation({ position: { x: 100.5, y: 64, z: 200.5 }, yaw: f3DegreesToYaw(deg), blockAt: blocks, kits: DEFAULTS.kits });
+    const r = detectStation({ position: { x: 100.5, y: 64, z: 200.5 }, yaw: f3DegreesToYaw(deg), blockAt: blocks, kits: BEHIND });
     assert.equal(r.ok, true, `bot facing F3 ${deg}`);
     assert.equal(r.home.facing, 'north');
     assert.deepEqual(r.kits.totem.container, { x: 97, y: 64, z: 200 });
@@ -104,8 +107,32 @@ test('the bot does not need to face the right way: the only matching orientation
 
 test('with containers on all four sides, the bot\'s own facing decides', async () => {
   const blocks = world({ '97,64,200': 'chest', '103,64,200': 'chest', '100,64,203': 'chest', '100,64,197': 'barrel' });
-  const r = detectStation({ position: { x: 100.5, y: 64, z: 200.5 }, yaw: f3DegreesToYaw(0), blockAt: blocks, kits: DEFAULTS.kits });
+  const r = detectStation({ position: { x: 100.5, y: 64, z: 200.5 }, yaw: f3DegreesToYaw(0), blockAt: blocks, kits: BEHIND });
   assert.equal(r.ok, true);
   assert.equal(r.home.facing, 'south');
   assert.equal(r.facingCorrected, undefined);
+});
+
+test("the VoidClan station: grief opposite the bed, totem left and pvp right when facing it", () => {
+  //        [GRIEF]            z = 198
+  // [TOTEM] floor [PVP]       z = 199 (double chests)
+  // [TOTEM]  BOT  [PVP]       z = 200
+  //          bed              z = 201
+  const blocks = world({
+    '99,64,199': 'chest', '99,64,200': 'chest',
+    '101,64,199': 'chest', '101,64,200': 'chest',
+    '100,64,198': 'chest',
+    '100,64,201': 'white_bed'
+  });
+  // Whatever way the bot happens to face after respawning, the result is the same.
+  for (const deg of [0, 90, 180, -90]) {
+    const r = detectStation({ position: { x: 100.5, y: 64, z: 200.5 }, yaw: f3DegreesToYaw(deg), blockAt: blocks, kits: DEFAULTS.kits });
+    assert.equal(r.ok, true, `facing ${deg}`);
+    assert.equal(r.home.facing, 'north');
+    assert.deepEqual(r.kits.totem.container, { x: 99, y: 64, z: 200 });
+    assert.deepEqual(r.kits.pvp.container, { x: 101, y: 64, z: 200 });
+    assert.deepEqual(r.kits.grief.container, { x: 100, y: 64, z: 198 });
+    assert.deepEqual(r.kits.totem.standAt, { x: 100, y: 64, z: 200 }, 'totem opened from the spot');
+    assert.deepEqual(r.kits.grief.standAt, { x: 100, y: 64, z: 199 }, 'one step towards grief');
+  }
 });

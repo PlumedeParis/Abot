@@ -4,7 +4,7 @@
 // When navigation.home is not configured, the bot treats the block it stands
 // on after login as home and the direction it faces (snapped to north, south,
 // east or west) as its orientation. It then looks along each kit's direction
-// (totem left, pvp right, grief behind) for the first chest, barrel or
+// (default: totem left, pvp right, grief in front) for the first chest, barrel or
 // shulker box within scanDistance blocks, at foot level, one block up or one
 // block down. The detected layout is stored in the database and reused on
 // later logins, so the bot does not need to be at home when it reconnects.
@@ -23,9 +23,9 @@ function facingFromYaw(yaw) {
 }
 
 // blockAt({x, y, z}) -> { name } | null
-// The bot's own facing is tried first. Because the kit chests sit left, right
-// and behind, only the correct orientation finds all three (the fourth side,
-// "in front", has no chest), so if the bot is turned the wrong way the other
+// The bot's own facing is tried first. Because the kit chests sit on three
+// sides, only the correct orientation finds all three (the fourth side, e.g.
+// where the bed is, has no chest), so if the bot is turned the wrong way the other
 // three orientations are tried and a single match is accepted (two or more
 // matches are ambiguous and refused). With containers on all four sides the
 // bot's own facing always matches, so it decides.
@@ -97,7 +97,7 @@ function applyStation(settings, station) {
 }
 
 function describeStation(station) {
-  const parts = Object.entries(station.kits).map(([n, k]) => `${n}: ${k.block} ${k.distance} block(s) ${k.direction === 'backward' ? 'behind' : `to the ${k.direction}`}`);
+  const parts = Object.entries(station.kits).map(([n, k]) => `${n}: ${k.block} ${k.distance} block(s) ${{ backward: 'behind', forward: 'in front' }[k.direction] || `to the ${k.direction}`}`);
   return `facing ${station.home.facing}; ${parts.join('; ')}`;
 }
 

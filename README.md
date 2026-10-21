@@ -29,11 +29,19 @@ Repository → **Settings → Secrets and variables → Actions → New reposito
 3. Stand on the block where the bot should live and **face north, south, east or west**. Place:
    - the **totem** chest 1–6 blocks to your **left**,
    - the **pvp** chest 1–6 blocks to your **right**,
-   - the **grief** chest 1–6 blocks **behind** you
+   - the **grief** chest 1–6 blocks **in front of** you
 
    in a straight line from that block, at foot level or one block up or down, with a free path to each.
 4. Fill each chest with **pre-filled shulker boxes** (1 shulker per delivery).
-5. **Log out while standing on that block.** Facing does not matter: if the bot is turned another way, it works out its orientation from the chests, because only one orientation puts all three on its left, right and behind. Keep the fourth side (in front) free of chests, barrels and shulker boxes.
+5. **Log out while standing on that block.** Facing does not matter: if the bot is turned another way, it works out its orientation from the chests, because only one orientation puts totem on its left, pvp on its right and grief in front. Keep the fourth side (behind, for example where the bed is) free of chests, barrels and shulker boxes.
+
+   Example (seen from above, the bot respawning on its bed spot):
+   ```
+           [GRIEF]
+   [TOTEM]  floor  [PVP]
+   [TOTEM]   BOT   [PVP]
+             bed
+   ```
 
 **4. Start it**
 **Actions** tab → **Run KitBot** → **Run workflow** → tick **"I have read the 1b1t.cc rules and automated bots are allowed"** → **Run workflow**.
@@ -89,7 +97,7 @@ Players then use `/link minecraft_username:<name>` in Discord, whisper `!link <c
 | `src/membership.js` | Live Discord membership check (REST) |
 | `src/discord.js` / `src/admin.js` | Slash commands, confirmations, admin actions, log channel |
 | `scripts/` | Config validator, syntax check, bounded supervisor for GitHub Actions |
-| `test/` | 128 automated tests (see [§8](#8-run-the-tests)) |
+| `test/` | 129 automated tests (see [§8](#8-run-the-tests)) |
 
 ---
 
@@ -210,7 +218,7 @@ base64 -w0 config.json                        # macOS: base64 -i config.json
 Paste the output as `KITBOT_CONFIG_JSON`. Update the secret whenever you change `config.json`.
 
 ### 6. Configure the TOTEM, PVP and GRIEF kit locations
-Build the station in game: a spot where the bot stands ("home"), with the **totem** chest to its **left**, the **pvp** chest to its **right**, and the **grief** chest **behind** it.
+Build the station in game: a spot where the bot stands ("home"), with the **totem** chest to its **left**, the **pvp** chest to its **right**, and the **grief** chest **in front** of it. Each kit's `direction` (`left`, `right`, `forward`, `backward`) can be changed in the settings.
 
 **Automatic (default):** park the bot account on the home block, facing north, south, east or west, and log out. On its next login, the bot reads its own position and facing, then looks along each direction (up to `navigation.scanDistance` = 6 blocks, at foot level, one up or one down) for the first chest, barrel or shulker box. The result is stored and reused on later logins. The log channel reports what was found (without coordinates). `/kitbot recalibrate` repeats the detection from where the bot stands. Kit requests are refused until all three chests are found.
 
@@ -225,9 +233,9 @@ Build the station in game: a spot where the bot stands ("home"), with the **tote
    ```json
    "totem": { "direction": "left",  "distance": 3, "standAt": null, ... }
    "pvp":   { "direction": "right", "distance": 3, ... }
-   "grief": { "direction": "backward", "standAt": { "x": 1200, "y": 70, "z": -3396 }, ... }
+   "grief": { "direction": "forward", "standAt": { "x": 1200, "y": 70, "z": -3404 }, ... }
    ```
-   Facing north, *left* is west (−X), *right* is east (+X) and *backward* is south (+Z).
+   Facing north, *left* is west (−X), *right* is east (+X), *forward* is north (−Z) and *backward* is south (+Z).
 3. For each kit, look at its chest. F3 shows `Targeted Block: X Y Z`. Put that in `retrieval.container`. It must be within 4.5 blocks of where the bot stands.
 4. List what one kit contains in `retrieval.items`. With the default `{ "nameRegex": "shulker_box$", "count": 1 }`, the bot takes **one shulker box of any colour** per delivery, so fill each chest with pre-filled shulker boxes. For loose items use exact names, for example `{ "name": "totem_of_undying", "count": 4 }`.
 5. Choose the **delivery method**. It depends on your server, so test it in game:
@@ -259,7 +267,7 @@ Build the station in game: a spot where the bot stands ("home"), with the **tote
 npm ci
 npm run check                    # syntax check
 npm run validate-config:example  # example settings structure
-npm test                         # 128 tests, about 2–3 minutes
+npm test                         # 129 tests, about 2–3 minutes
 ```
 The tests cover cooldowns (shared across kits), the rolling quota, refunds, the global 2-per-minute limit, one-pending-request races, restart persistence, linking (single-use codes, takeover protection, 30-day changes, history), access revocation when a member leaves, fail-closed Discord outages, admin permissions (non-admins, other guilds, forged confirmations), the guarantee that failed or unconfirmed deliveries are never reported as successful, secret redaction, and a real-protocol run against a fake 1.21.11 server. The `ci.yml` workflow runs all of this on every push.
 

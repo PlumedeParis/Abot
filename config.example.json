@@ -125,7 +125,7 @@
       }
     },
     "grief": {
-      "direction": "backward",
+      "direction": "forward",
       "distance": null,
       "standAt": null,
       "timeoutMs": 60000,

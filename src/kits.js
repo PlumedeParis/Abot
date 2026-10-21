@@ -4,7 +4,7 @@
 //
 // Directions: the bot's base pose is navigation.home (x, y, z + facing). Kits
 // are placed relative to that pose: TOTEM to the LEFT, PVP to the RIGHT and
-// GRIEF BACKWARD (configurable per kit). A kit either gives explicit "standAt"
+// GRIEF IN FRONT (configurable per kit: left, right, forward or backward). A kit either gives explicit "standAt"
 // coordinates or a "distance" in blocks from home along its direction.
 //
 // Retrieval methods:

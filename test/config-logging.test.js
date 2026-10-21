@@ -80,7 +80,7 @@ test('the default kit directions follow the specification', () => {
   const s = testSettings();
   assert.equal(s.kits.totem.direction, 'left');
   assert.equal(s.kits.pvp.direction, 'right');
-  assert.equal(s.kits.grief.direction, 'backward');
+  assert.equal(s.kits.grief.direction, 'forward');
   assert.equal(s.limits.cooldownMinutes, 10);
   assert.equal(s.limits.dailyQuota, 10);
   assert.equal(s.limits.globalPerMinute, 2);
