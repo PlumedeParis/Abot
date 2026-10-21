@@ -263,7 +263,8 @@ test('teleport delivery posts a location report (Discord only) with nearby conta
   };
   const { row } = await runDelivery(world, TELEPORT);
   assert.equal(row.status, 'delivered');
-  const evt = lastLogger.events.find((e) => e.type === 'delivery.teleported');
+  assert.ok(lastLogger.events.some((e) => e.type === 'delivery.teleported' && !e.details), 'short line in the log channel');
+  const evt = lastLogger.events.find((e) => e.type === 'delivery.report');
   assert.ok(evt, 'report logged');
   assert.ok(!/5001|-3000/.test(evt.message), 'no coordinates in the console part');
   assert.match(evt.details, /\*\*5001 70 -3000\*\* \(the_nether\)/);
@@ -271,6 +272,8 @@ test('teleport delivery posts a location report (Discord only) with nearby conta
   assert.match(evt.details, /on the ground: 2/);
   assert.match(evt.details, /Other players nearby: Bob/);
   assert.match(evt.details, /Kit: \*\*totem\*\* for \*\*Alice\*\*/);
+  assert.match(evt.message, /^✅ totem kit delivered to Alice$/);
+  assert.match(evt.details, /Picked up by the player/);
 });
 
 // ---- opening chests -----------------------------------------------------------
@@ -297,4 +300,18 @@ test('if the server ignores the first click, the bot retries and still delivers'
   assert.equal(row.status, 'delivered');
   assert.equal(world.bot.openCalls.length, 2);
   assert.deepEqual(world.bot.openCalls[1].direction, new Vec3(0, 1, 0), 'second try uses the top face');
+});
+
+test('delivery report: "not confirmed" when the kit was thrown but not picked up', async () => {
+  const world = farPlayerWorld({ pickup: 'none' });
+  await runDelivery(world, TELEPORT);
+  const evt = lastLogger.events.find((e) => e.type === 'delivery.report');
+  assert.match(evt.message, /^⚠️ totem kit not confirmed for Alice$/);
+  assert.match(evt.details, /Pickup not confirmed: player did not pick up the kit in time/);
+});
+
+test('no delivery report when the kit never left the bot', async () => {
+  const world = farPlayerWorld({ accepts: false });
+  await runDelivery(world, TELEPORT);
+  assert.ok(!lastLogger.events.some((e) => e.type === 'delivery.report'));
 });

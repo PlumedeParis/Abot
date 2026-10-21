@@ -23,7 +23,7 @@ function fakeRest({ guilds = [{ id: GUILD, name: 'VoidClan' }], channels = [], c
     post: async (route, { body }) => {
       if (createFails) throw new DiscordAPIError({ code: 50013, message: 'Missing Permissions' }, 50013, 403, 'POST', route, {});
       posts.push({ route, body });
-      return { id: '400000000000000004', name: body.name };
+      return { id: String(400000000000000004n + BigInt(posts.length - 1)), name: body.name };
     }
   };
 }
@@ -34,6 +34,9 @@ test('only a token is needed: server, owner admin and a private log channel are 
   assert.equal(ctx.guildId, GUILD);
   assert.deepEqual(ctx.adminIds, [OWNER]);
   assert.equal(ctx.logChannelId, '400000000000000004');
+  assert.equal(ctx.deliveriesChannelId, '400000000000000005');
+  assert.deepEqual(rest.posts.map((p) => p.body.name), ['kitbot-logs', 'delivered-kits']);
+  assert.deepEqual(rest.posts[1].body.permission_overwrites[0], { id: GUILD, type: 0, deny: String(1n << 10n) }, '#delivered-kits is private too');
   const ow = rest.posts[0].body.permission_overwrites;
   assert.deepEqual(ow[0], { id: GUILD, type: 0, deny: String(1n << 10n) }, '@everyone cannot see the channel');
   assert.ok(ow.some((o) => o.id === BOT && o.type === 1));
@@ -46,7 +49,7 @@ test('an existing #kitbot-logs channel is reused and configured values win', asy
   const ctx = await resolveDiscordContext({ token: 'x', rest, adminIds: ['600000000000000006'] });
   assert.equal(ctx.logChannelId, '500000000000000005');
   assert.deepEqual(ctx.adminIds, ['600000000000000006']);
-  assert.equal(rest.posts.length, 0);
+  assert.deepEqual(rest.posts.map((p) => p.body.name), ['delivered-kits']);
 });
 
 test('clear errors when the bot is in no server or several servers', async () => {
@@ -80,4 +83,11 @@ test('waits for the bot to be invited instead of failing at once', async () => {
   assert.equal(ctx.guildId, GUILD);
   assert.equal(hints.length, 2);
   assert.match(hints[0], /client_id=100000000000000001/);
+});
+
+test('an existing #delivered-kits channel is reused', async () => {
+  const rest = fakeRest({ channels: [{ id: '500000000000000005', type: 0, name: 'kitbot-logs' }, { id: '700000000000000007', type: 0, name: 'delivered-kits' }] });
+  const ctx = await resolveDiscordContext({ token: 'x', rest });
+  assert.equal(ctx.deliveriesChannelId, '700000000000000007');
+  assert.equal(rest.posts.length, 0);
 });

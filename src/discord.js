@@ -75,6 +75,14 @@ const ts = (ms) => (ms ? `<t:${Math.floor(Number(ms) / 1000)}:R>` : 'never');
 const clip = (s, n = 1000) => (String(s).length > n ? `${String(s).slice(0, n - 1)}…` : String(s));
 
 function eventEmbed(evt) {
+  if (evt.type === 'delivery.report') {
+    const [title, ...rest] = String(evt.message).split('\n');
+    return new EmbedBuilder()
+      .setColor(title.startsWith('✅') ? 0x2ecc71 : 0xe67e22)
+      .setTitle(clip(title, 250))
+      .setDescription(clip(rest.join('\n') || '—', 4000))
+      .setTimestamp(new Date(Number(evt.created_at)));
+  }
   return new EmbedBuilder()
     .setColor(LEVEL_COLORS[evt.level] || 0x95a5a6)
     .setTitle(clip(`${evt.level} · ${evt.type}`, 250))
@@ -108,20 +116,32 @@ function createDiscordBot({ config, db, logger, checkMembership, onSettingsReloa
     if (flushing || !connected) return;
     flushing = true;
     try {
-      const channel = await client.channels.fetch(secrets.discord.logChannelId).catch(() => null);
-      if (!channel || !channel.isTextBased()) return;
+      const logChannel = await client.channels.fetch(secrets.discord.logChannelId).catch(() => null);
+      if (!logChannel || !logChannel.isTextBased()) return;
+      const deliveriesId = secrets.discord.deliveriesChannelId;
+      const deliveries = deliveriesId && deliveriesId !== secrets.discord.logChannelId ? await client.channels.fetch(deliveriesId).catch(() => null) : null;
       for (let i = 0; i < 5; i++) {
         const events = await fetchUnsentEvents(db, 10);
         if (!events.length) break;
-        const ids = events.map((e) => e.id);
-        try {
-          await channel.send({ embeds: events.map(eventEmbed), allowedMentions: { parse: [] } });
-          await markEventsSent(db, ids);
-        } catch (e) {
-          await markEventsFailed(db, ids);
-          console.error(`[${new Date().toISOString()}] Could not post to the log channel: ${logger.redact(e.message)}`);
-          break;
+        // Delivery reports go to #delivered-kits, everything else to the log channel.
+        const groups = [
+          [deliveries && deliveries.isTextBased() ? deliveries : logChannel, events.filter((e) => e.type === 'delivery.report')],
+          [logChannel, events.filter((e) => e.type !== 'delivery.report')]
+        ];
+        let failed = false;
+        for (const [channel, group] of groups) {
+          if (!group.length) continue;
+          const ids = group.map((e) => e.id);
+          try {
+            await channel.send({ embeds: group.map(eventEmbed), allowedMentions: { parse: [] } });
+            await markEventsSent(db, ids);
+          } catch (e) {
+            await markEventsFailed(db, ids);
+            console.error(`[${new Date().toISOString()}] Could not post to Discord: ${logger.redact(e.message)}`);
+            failed = true;
+          }
         }
+        if (failed) break;
       }
     } finally {
       flushing = false;

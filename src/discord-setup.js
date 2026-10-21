@@ -38,6 +38,8 @@ async function resolveDiscordContext({
   logChannelId = '',
   adminIds = [],
   logChannelName = 'kitbot-logs',
+  deliveriesChannelId = '',
+  deliveriesChannelName = 'delivered-kits',
   rest = null,
   retryDelayMs = 5000,
   waitForInviteMs = 0,
@@ -77,40 +79,56 @@ async function resolveDiscordContext({
     notes.push('Administrator: the server owner (set DISCORD_ADMIN_IDS to add others).');
   }
 
+  // Private text channel visible only to the bot and the administrators.
+  let channels = null;
+  async function privateChannel(name, topic) {
+    channels = channels || (await call(() => api.get(Routes.guildChannels(guildId))));
+    const existing = channels.find((c) => c.type === 0 && c.name === name);
+    if (existing) return { id: existing.id, created: false };
+    const created = await call(() =>
+      api.post(Routes.guildChannels(guildId), {
+        body: {
+          name,
+          type: 0,
+          topic,
+          permission_overwrites: [
+            // The @everyone role has the same ID as the server.
+            { id: guildId, type: 0, deny: String(VIEW_CHANNEL) },
+            { id: me.id, type: 1, allow: String(VIEW_CHANNEL | SEND_MESSAGES | EMBED_LINKS) },
+            ...adminIds.map((id) => ({ id, type: 1, allow: String(VIEW_CHANNEL) }))
+          ]
+        }
+      })
+    );
+    return { id: created.id, created: true };
+  }
+
   if (!logChannelId) {
-    const channels = await call(() => api.get(Routes.guildChannels(guildId)));
-    const existing = channels.find((c) => c.type === 0 && c.name === logChannelName);
-    if (existing) {
-      logChannelId = existing.id;
-      notes.push(`Log channel: #${logChannelName}.`);
-    } else {
-      try {
-        const created = await call(() =>
-          api.post(Routes.guildChannels(guildId), {
-            body: {
-              name: logChannelName,
-              type: 0,
-              topic: 'KitBot events (private to the bot and administrators)',
-              permission_overwrites: [
-                // The @everyone role has the same ID as the server.
-                { id: guildId, type: 0, deny: String(VIEW_CHANNEL) },
-                { id: me.id, type: 1, allow: String(VIEW_CHANNEL | SEND_MESSAGES | EMBED_LINKS) },
-                ...adminIds.map((id) => ({ id, type: 1, allow: String(VIEW_CHANNEL) }))
-              ]
-            }
-          })
-        );
-        logChannelId = created.id;
-        notes.push(`Created the private log channel #${logChannelName}.`);
-      } catch (e) {
-        throw new Error(
-          `Could not create the #${logChannelName} channel (${e.message}). Either create a text channel named "${logChannelName}" that the bot can see, or re-invite the bot with this link, which includes the Manage Channels permission: ${invite}`
-        );
-      }
+    try {
+      const ch = await privateChannel(logChannelName, 'KitBot events (private to the bot and administrators)');
+      logChannelId = ch.id;
+      notes.push(ch.created ? `Created the private log channel #${logChannelName}.` : `Log channel: #${logChannelName}.`);
+    } catch (e) {
+      throw new Error(
+        `Could not create the #${logChannelName} channel (${e.message}). Either create a text channel named "${logChannelName}" that the bot can see, or re-invite the bot with this link, which includes the Manage Channels permission: ${invite}`
+      );
     }
   }
 
-  return { guildId, logChannelId, adminIds, botUserId: me.id, inviteUrl: invite, notes };
+  // Delivery reports (location, kit, time) go to their own private channel.
+  // If it cannot be created, they go to the log channel instead.
+  if (!deliveriesChannelId) {
+    try {
+      const ch = await privateChannel(deliveriesChannelName, 'One report per delivered kit (private to the bot and administrators)');
+      deliveriesChannelId = ch.id;
+      notes.push(ch.created ? `Created the private channel #${deliveriesChannelName}.` : `Delivery reports channel: #${deliveriesChannelName}.`);
+    } catch (e) {
+      deliveriesChannelId = logChannelId;
+      notes.push(`Could not create #${deliveriesChannelName} (${e.message}); delivery reports go to the log channel.`);
+    }
+  }
+
+  return { guildId, logChannelId, deliveriesChannelId, adminIds, botUserId: me.id, inviteUrl: invite, notes };
 }
 
 module.exports = { resolveDiscordContext, inviteUrl, INVITE_PERMISSIONS };

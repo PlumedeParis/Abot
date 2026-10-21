@@ -5,7 +5,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Events } = require('discord.js');
-const { createDiscordBot, buildCommands } = require('../src/discord');
+const { createDiscordBot, buildCommands, eventEmbed } = require('../src/discord');
 const { getSetting } = require('../src/database');
 const linking = require('../src/linking');
 const { sqliteDb, testSettings, fakeLogger, member, ADMIN_ID, GUILD_ID } = require('./helpers');
@@ -156,4 +156,13 @@ test('routine Discord reconnects are not posted to the log channel', async () =>
   bot.client.emit(Events.ShardResume, 0, 1);
   await new Promise((r) => setTimeout(r, 20));
   assert.deepEqual(logger.events.filter((e) => e.level !== 'DEBUG').map((e) => e.type), []);
+});
+
+test('delivery reports are shown as green (delivered) or orange (not confirmed) cards', () => {
+  const ok = eventEmbed({ type: 'delivery.report', level: 'INFO', message: '✅ totem kit delivered to Alice\n📍 **1 2 3** (overworld)', created_at: 0 }).toJSON();
+  assert.equal(ok.title, '✅ totem kit delivered to Alice');
+  assert.equal(ok.color, 0x2ecc71);
+  assert.match(ok.description, /1 2 3/);
+  const warn = eventEmbed({ type: 'delivery.report', level: 'INFO', message: '⚠️ pvp kit not confirmed for Bob\nx', created_at: 0 }).toJSON();
+  assert.equal(warn.color, 0xe67e22);
 });

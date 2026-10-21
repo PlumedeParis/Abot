@@ -46,7 +46,9 @@ Repository → **Settings → Secrets and variables → Actions → New reposito
 **4. Start it**
 **Actions** tab → **Run KitBot** → **Run workflow** → tick **"I have read the 1b1t.cc rules and automated bots are allowed"** → **Run workflow**.
 
-When the bot logs in, it detects the three chests and reports in `#kitbot-logs`. If a chest is not found, the message says which one. Fix it in game and run `/kitbot recalibrate`. A run lasts up to 340 minutes; start it again for another session.
+When the bot logs in, it detects the three chests and reports in `#kitbot-logs`. If a chest is not found, the message says which one. Fix it in game and run `/kitbot recalibrate`.
+
+**How long it runs:** one GitHub run lasts at most 340 minutes. Enter a larger total (for example `500`) and, when the first run ends, it saves the data and starts a new run for the remaining 160 minutes, and so on until the total is used up. There is a gap of about two minutes between runs while the next one starts. Cancelling a run (or a run failing) stops the chain.
 
 Players then use `/link minecraft_username:<name>` in Discord, whisper `!link <code>` to VoidClanKitBot, and type `!kit totem`, `!kit pvp` or `!kit grief`. The bot takes the kit from the chest, sends the player `/tpa`, and the player accepts with `/tpaccept` within 60 seconds. The bot appears next to them, throws the kit, then uses `/kill` to respawn at its bed and walks back to its spot. Players never need to come to your base. If the player does not accept in time, the bot has not left the base, so the kit goes back in the chest and the order does not count. Other delivery options are in [§6](#6-configure-the-totem-pvp-and-grief-kit-locations).
 
@@ -97,7 +99,7 @@ Players then use `/link minecraft_username:<name>` in Discord, whisper `!link <c
 | `src/membership.js` | Live Discord membership check (REST) |
 | `src/discord.js` / `src/admin.js` | Slash commands, confirmations, admin actions, log channel |
 | `scripts/` | Config validator, syntax check, bounded supervisor for GitHub Actions |
-| `test/` | 131 automated tests (see [§8](#8-run-the-tests)) |
+| `test/` | 135 automated tests (see [§8](#8-run-the-tests)) |
 
 ---
 
@@ -206,6 +208,7 @@ Repository → **Settings → Secrets and variables → Actions → New reposito
 | `MINECRAFT_PASSWORD` | no | the account password written in `bot.yml`. Set this secret to use a different one |
 | `DISCORD_GUILD_ID` | no | the only server the bot is in |
 | `DISCORD_LOG_CHANNEL_ID` | no | `#kitbot-logs`, created if missing |
+| `DISCORD_DELIVERIES_CHANNEL_ID` | no | `#delivered-kits`, created if missing |
 | `DISCORD_ADMIN_IDS` | no | the server owner |
 | `DATABASE_URL` | no | SQLite kept in the Actions cache (see step 7) |
 | `KITBOT_CONFIG_JSON` | no | built-in settings with chest auto-detection |
@@ -267,7 +270,7 @@ Build the station in game: a spot where the bot stands ("home"), with the **tote
 npm ci
 npm run check                    # syntax check
 npm run validate-config:example  # example settings structure
-npm test                         # 131 tests, about 2–3 minutes
+npm test                         # 135 tests, about 2–3 minutes
 ```
 The tests cover cooldowns (shared across kits), the rolling quota, refunds, the global 2-per-minute limit, one-pending-request races, restart persistence, linking (single-use codes, takeover protection, 30-day changes, history), access revocation when a member leaves, fail-closed Discord outages, admin permissions (non-admins, other guilds, forged confirmations), the guarantee that failed or unconfirmed deliveries are never reported as successful, secret redaction, and a real-protocol run against a fake 1.21.11 server. The `ci.yml` workflow runs all of this on every push.
 
@@ -278,7 +281,7 @@ npm start                  # both bots
 npm run start:minecraft    # only Minecraft
 npm run start:discord      # only Discord
 ```
-On GitHub Actions: **Actions → "Run KitBot" → Run workflow**, tick the rules confirmation, then choose the duration (up to 340 minutes), the role and the runner. The job installs dependencies, checks the secrets, validates the settings, runs the bot under `scripts/supervise.js` (which restarts it after a crash, up to 5 times), shuts it down cleanly before the time limit, and uploads the console log as an artifact. Only one copy can run at a time.
+On GitHub Actions: **Actions → "Run KitBot" → Run workflow**, tick the rules confirmation, then choose the total duration in minutes (more than 340 continues in new runs, see the Quick start), the role and the runner. The job installs dependencies, checks the secrets, validates the settings, runs the bot under `scripts/supervise.js` (which restarts it after a crash, up to 5 times), shuts it down cleanly before the time limit, and uploads the console log as an artifact. Only one copy can run at a time.
 
 Stop the bot with Ctrl+C or SIGTERM (or cancel the workflow). It finishes or aborts the current delivery, records its state, logs the shutdown and disconnects cleanly.
 
@@ -291,7 +294,7 @@ Stop the bot with Ctrl+C or SIGTERM (or cancel the workflow). It finishes or abo
 
 Tokens, passwords, database credentials and `/reg` / `/log` arguments are redacted from every log line.
 
-**Teleport report:** each time the bot teleports to a player, `#kitbot-logs` gets the time, the player and kit, the coordinates and dimension, the number of chests, trapped chests, barrels, placed shulker boxes and ender chests within 16 blocks, shulker boxes lying on the ground, and other players nearby. Coordinates are sent **only** to Discord. The console and GitHub run log just say "Teleported to <player>". Routine Discord reconnects (about one second) are not posted; only an outage longer than a minute is.
+**Delivery reports:** each time a kit is handed over, the private channel `#delivered-kits` (created automatically, visible only to the bot and the administrators) gets one card: green "✅ delivered" when the player picked it up, orange "⚠️ not confirmed" when it was thrown but the pickup could not be confirmed. Each card has the time, the player and kit, the coordinates and dimension, the number of chests, trapped chests, barrels, placed shulker boxes and ender chests within 16 blocks, shulker boxes lying on the ground, and other players nearby. Set `DISCORD_DELIVERIES_CHANNEL_ID` to use another channel. Coordinates are sent **only** to Discord. `#kitbot-logs`, the console and the GitHub run log just say "Teleported to <player>". Routine Discord reconnects (about one second) are not posted; only an outage longer than a minute is.
 
 ### 11. Troubleshooting
 
@@ -325,7 +328,7 @@ Tokens, passwords, database credentials and `/reg` / `/log` arguments are redact
 
 ### 12. Migrate to permanent hosting
 
-**What GitHub Actions can and cannot do.** CI (`ci.yml`) is exactly what Actions is for. `bot.yml` runs the bot for *one bounded session* (maximum 6 hours per job on GitHub-hosted runners) that you start by hand. It does not re-trigger itself and has no schedule, so it is **not** 24/7 hosting, and there is no attempt to keep free runners alive. Also check GitHub's terms for Actions: running a long-lived game bot on GitHub-hosted runners may not be an allowed use. The supported 24/7 options are below. Alternatively, register a machine you own as a **self-hosted runner** and choose `self-hosted` as the runner input; the job limit is then much longer, but a permanent host is still simpler.
+**What GitHub Actions can and cannot do.** CI (`ci.yml`) is exactly what Actions is for. `bot.yml` runs the bot for the total time you enter when you start it by hand: one job lasts at most 340 minutes, and a longer total continues in new runs until it is used up. It has no schedule and never runs longer than you asked, so it is **not** 24/7 hosting. Also check GitHub's terms for Actions: running a long-lived game bot on GitHub-hosted runners, especially chained over many hours, may not be an allowed use and could get Actions disabled on the account. The supported 24/7 options are below. Alternatively, register a machine you own as a **self-hosted runner** and choose `self-hosted` as the runner input; the job limit is then much longer, but a permanent host is still simpler.
 
 **Option A: Linux VPS with systemd** (any provider; 1 vCPU and 1 GB RAM is enough)
 ```bash

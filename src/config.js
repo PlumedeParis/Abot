@@ -173,6 +173,7 @@ function loadSecrets(env) {
       token: env.DISCORD_TOKEN || '',
       guildId: env.DISCORD_GUILD_ID || '',
       logChannelId: env.DISCORD_LOG_CHANNEL_ID || '',
+      deliveriesChannelId: env.DISCORD_DELIVERIES_CHANNEL_ID || '',
       adminIds: parseIdList(env.DISCORD_ADMIN_IDS)
     },
     database: {
@@ -334,6 +335,7 @@ function validateSecrets(secrets, role) {
     if (secrets.discord.guildId && !/^\d{15,22}$/.test(secrets.discord.guildId)) errors.push('DISCORD_GUILD_ID must be a Discord server ID');
   }
   if (secrets.discord.logChannelId && !/^\d{15,22}$/.test(secrets.discord.logChannelId)) errors.push('DISCORD_LOG_CHANNEL_ID must be a channel ID');
+  if (secrets.discord.deliveriesChannelId && !/^\d{15,22}$/.test(secrets.discord.deliveriesChannelId)) errors.push('DISCORD_DELIVERIES_CHANNEL_ID must be a channel ID');
   for (const id of secrets.discord.adminIds) if (!/^\d{15,22}$/.test(id)) errors.push(`DISCORD_ADMIN_IDS contains an invalid ID: ${id}`);
   return errors;
 }

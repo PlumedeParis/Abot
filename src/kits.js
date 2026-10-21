@@ -361,11 +361,12 @@ function createKitService({ getBot, getSettings, logger, sendCommand, onChatLine
     return { x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z), dimension: dim, blocks, droppedShulkers, players };
   }
 
-  async function reportTeleport(request) {
+  // Snapshot of where the kit is handed over, taken just before tossing.
+  function locationReport(request) {
     try {
       const r = surroundings();
       const others = r.players.filter((p) => p !== request.mc_username && p !== getBot().username);
-      const details = [
+      return [
         `🕒 <t:${Math.floor(Date.now() / 1000)}:F>`,
         `📦 Kit: **${request.kit}** for **${request.mc_username}** (request #${request.id})`,
         `📍 **${r.x} ${r.y} ${r.z}** (${r.dimension})`,
@@ -373,10 +374,19 @@ function createKitService({ getBot, getSettings, logger, sendCommand, onChatLine
         `🟪 Shulker boxes on the ground: ${r.droppedShulkers}`,
         `👥 Other players nearby: ${others.length ? others.join(', ') : 'none'}`
       ].join('\n');
-      await logger.info('delivery.teleported', `Teleported to ${request.mc_username} for a ${request.kit} kit.`, undefined, details);
     } catch (e) {
-      await logger.debug('delivery.teleported', `Could not build the location report: ${e.message}`);
+      logger.debug('delivery.report', `Could not build the location report: ${e.message}`);
+      return null;
     }
+  }
+
+  // One message per handed-over kit in the private "delivered-kits" channel
+  // (event type "delivery.report"); the details never reach the console.
+  async function postDeliveryReport(request, details, delivered, reason) {
+    if (!details) return;
+    const title = delivered ? `✅ ${request.kit} kit delivered to ${request.mc_username}` : `⚠️ ${request.kit} kit not confirmed for ${request.mc_username}`;
+    const status = delivered ? '✔️ Picked up by the player' : `❔ Pickup not confirmed: ${reason}`;
+    await logger.info('delivery.report', title, undefined, `${details}\n${status}`);
   }
 
   function distanceFromHome() {
@@ -427,6 +437,15 @@ function createKitService({ getBot, getSettings, logger, sendCommand, onChatLine
     if (!kit) throw new DeliveryError(`kit "${kitName}" is not configured`);
     const delivery = resolveDelivery(s, kitName);
     const timeoutMs = kit.timeoutMs || s.navigation.defaultTimeoutMs;
+    let report = null;
+    let handedOff = false;
+    const trackedCtx = {
+      ...ctx,
+      setStage: async (st) => {
+        if (st === 'handoff') handedOff = true;
+        await ctx.setStage(st);
+      }
+    };
 
     try {
       await ctx.setStage('navigating');
@@ -469,10 +488,14 @@ function createKitService({ getBot, getSettings, logger, sendCommand, onChatLine
         });
       }
 
-      if (teleport) await reportTeleport(request);
-      await tossAndConfirm(request, kit.retrieval.items, delivery, ctx);
+      if (teleport) await logger.info('delivery.teleported', `Teleported to ${request.mc_username} for a ${request.kit} kit.`);
+      report = locationReport(request);
+      await tossAndConfirm(request, kit.retrieval.items, delivery, trackedCtx);
+      await postDeliveryReport(request, report, true);
       return { outcome: 'delivered' };
     } catch (e) {
+      // The kit was thrown (report taken just before) but the pickup was not confirmed.
+      if (report && handedOff) await postDeliveryReport(request, report, false, e.message);
       // Put untouched kit items back so stock is not lost (only before handoff,
       // and only when the chest is within walking distance).
       if (isFarFromHome()) {

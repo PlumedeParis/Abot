@@ -35,7 +35,12 @@ async function main() {
       await logger.warn('discord.setup', `The Discord bot is not in any server yet. Open this link to add it (waiting up to 15 minutes): ${invite}`);
     }
   });
-  Object.assign(config.secrets.discord, { guildId: discordCtx.guildId, logChannelId: discordCtx.logChannelId, adminIds: discordCtx.adminIds });
+  Object.assign(config.secrets.discord, {
+    guildId: discordCtx.guildId,
+    logChannelId: discordCtx.logChannelId,
+    deliveriesChannelId: discordCtx.deliveriesChannelId,
+    adminIds: discordCtx.adminIds
+  });
   for (const note of discordCtx.notes) await logger.info('discord.setup', note);
 
   const checkMembership = createMembershipChecker({

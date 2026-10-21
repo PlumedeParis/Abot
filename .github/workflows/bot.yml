@@ -1,9 +1,10 @@
 name: Run KitBot
 
-# Runs the bot for ONE session, started by hand from the Actions tab.
-# GitHub-hosted jobs stop after at most 6 hours, so this is not 24/7 hosting,
-# and the workflow never re-triggers itself. Run it again to start a new
-# session, or use a permanent host for 24/7 (see README).
+# Runs the bot, started by hand from the Actions tab. A GitHub-hosted job
+# stops after at most 6 hours, so one run lasts at most 340 minutes. When you
+# ask for more (e.g. 500), the run saves the data at the end and starts a new
+# run for the remaining time (here 160 minutes), until the total is used up.
+# Cancelling a run stops the chain. For real 24/7 hosting see the README.
 #
 # Only one secret is required: DISCORD_TOKEN. Everything else has a default:
 #   - Minecraft: 1b1t.cc, account VoidClanKitBot (override with secrets
@@ -23,9 +24,13 @@ on:
         required: true
         default: false
       duration_minutes:
-        description: "How long to run, in minutes (max 340)"
+        description: "Total minutes to run (more than 340 continues in new runs)"
         required: true
         default: "340"
+      part:
+        description: "Run number in a chain (set automatically)"
+        required: false
+        default: "1"
       role:
         description: "Which part to run"
         required: true
@@ -39,6 +44,7 @@ on:
 
 permissions:
   contents: read
+  actions: write # to start the next run of a long session
 
 # Never run two copies of the bot at once (one Minecraft account, one inventory).
 concurrency:
@@ -66,8 +72,9 @@ jobs:
       KITBOT_CONFIG_JSON: ${{ secrets.KITBOT_CONFIG_JSON }}
       SQLITE_PATH: data/kitbot.db
       KITBOT_BOTS_ALLOWED: ${{ inputs.confirm_rules }}
-      KITBOT_RUN_MINUTES: ${{ inputs.duration_minutes }}
+      KITBOT_TOTAL_MINUTES: ${{ inputs.duration_minutes }}
       KITBOT_ROLE_INPUT: ${{ inputs.role }}
+      PART: ${{ inputs.part || '1' }}
     steps:
       - name: Check prerequisites
         shell: bash
@@ -77,11 +84,25 @@ jobs:
             echo "::error::Tick the box confirming the 1b1t.cc rules allow bots when you click 'Run workflow'."
             ok=0
           fi
+          if ! [[ "$KITBOT_TOTAL_MINUTES" =~ ^[0-9]+$ ]] || [ "$KITBOT_TOTAL_MINUTES" -lt 1 ]; then
+            echo "::error::duration_minutes must be a whole number of minutes, e.g. 500."
+            ok=0
+          fi
           if [ -z "$DISCORD_TOKEN" ]; then
             echo "::error::Add the DISCORD_TOKEN secret: repository Settings > Secrets and variables > Actions > New repository secret."
             ok=0
           fi
           [ $ok = 1 ]
+
+      - name: Plan this run
+        id: plan
+        shell: bash
+        run: |
+          total=$KITBOT_TOTAL_MINUTES
+          this=$(( total < 340 ? total : 340 ))
+          echo "this_run=$this" >> "$GITHUB_OUTPUT"
+          echo "remaining=$(( total - this ))" >> "$GITHUB_OUTPUT"
+          echo "Run ${PART}: ${this} minutes now, $(( total - this )) minutes in following runs."
 
       - uses: actions/checkout@v4
 
@@ -108,6 +129,8 @@ jobs:
 
       - name: Run the bot
         shell: bash
+        env:
+          KITBOT_RUN_MINUTES: ${{ steps.plan.outputs.this_run }}
         run: node scripts/supervise.js "$KITBOT_ROLE_INPUT" 2>&1 | tee kitbot.log
 
       - name: Save data for the next run
@@ -125,3 +148,27 @@ jobs:
           path: kitbot.log
           retention-days: 3
           if-no-files-found: ignore
+
+      # Only after the data has been saved, and only if this run ended normally
+      # (not cancelled, not failed): start the next run for the remaining time.
+      # It waits for this run to finish (concurrency group), then restores the data.
+      - name: Continue in a new run
+        if: success() && steps.plan.outputs.remaining != '0'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REMAINING: ${{ steps.plan.outputs.remaining }}
+          RUNNER_LABEL: ${{ inputs.runner }}
+        run: |
+          [[ "$PART" =~ ^[0-9]+$ ]] || PART=1
+          next=$(( PART + 1 ))
+          body=$(printf '{"ref":"%s","inputs":{"confirm_rules":"true","duration_minutes":"%s","part":"%s","role":"%s","runner":"%s"}}' \
+            "$GITHUB_REF_NAME" "$REMAINING" "$next" "$KITBOT_ROLE_INPUT" "$RUNNER_LABEL")
+          code=$(curl -sS -o response.txt -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/workflows/bot.yml/dispatches" -d "$body")
+          if [ "$code" != "204" ]; then
+            echo "::error::Could not start the next run (HTTP $code): $(cat response.txt)"
+            exit 1
+          fi
+          echo "Started run $next for the remaining $REMAINING minutes."
