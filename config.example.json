@@ -92,6 +92,9 @@
     "pickupTimeoutMs": 15000,
     "returnUndelivered": true
   },
+  "stock": {
+    "lowThreshold": 5
+  },
   "kits": {
     "totem": {
       "direction": "left",

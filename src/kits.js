@@ -127,7 +127,8 @@ async function waitFor(predicate, { timeoutMs, intervalMs = 250, signal, message
   throw new DeliveryError(message);
 }
 
-function createKitService({ getBot, getSettings, logger, sendCommand, onChatLine, pathfinderLib = require('mineflayer-pathfinder') }) {
+// onStock(kitName, kitsLeft) is called each time a kit chest has been opened.
+function createKitService({ getBot, getSettings, logger, sendCommand, onChatLine, onStock = async () => {}, pathfinderLib = require('mineflayer-pathfinder') }) {
   function configureMovements(bot) {
     const nav = getSettings().navigation;
     const moves = new pathfinderLib.Movements(bot);
@@ -219,6 +220,13 @@ function createKitService({ getBot, getSettings, logger, sendCommand, onChatLine
         }
       }
     } finally {
+      // While the chest is open, count how many more kits it can give.
+      try {
+        const items = container.containerItems();
+        await onStock(kitName, Math.min(...specs.map((spec) => Math.floor(countMatching(items, spec) / spec.count))));
+      } catch (e) {
+        await logger.debug('stock.count', `Could not count the ${kitName} stock: ${e.message}`);
+      }
       try {
         container.close();
       } catch {

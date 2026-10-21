@@ -110,7 +110,9 @@ function fakeWorld({ stock = 1, pickup = 'target' } = {}) {
 }
 
 let lastLogger = null;
+let lastStock = [];
 async function runDelivery(world, settingsOverride = {}) {
+  lastStock = [];
   const s = testSettings(deepMerge({ delivery: { pickupTimeoutMs: 300, waitForPlayerMs: 300 }, navigation: { respawnWaitMs: 300 } }, settingsOverride));
   world.commands = [];
   const db = await sqliteDb();
@@ -126,7 +128,8 @@ async function runDelivery(world, settingsOverride = {}) {
       if (world.onCommand) world.onCommand(cmd);
     },
     onChatLine: () => () => {},
-    pathfinderLib: world.fakePathfinder
+    pathfinderLib: world.fakePathfinder,
+    onStock: async (kit, left) => lastStock.push([kit, left])
   });
   const q = createQueue({
     db,
@@ -324,4 +327,11 @@ test('delivery announcement text', () => {
     'Steve just received a totem kit. Order one yourself by doing !kit totem/pvp/grief'
   );
   assert.equal(deliveryAnnouncement('', { mc_username: 'Steve', kit: 'totem' }), '');
+});
+
+test('the kits left in the chest are counted each time it is opened', async () => {
+  await runDelivery(fakeWorld({ stock: 3 }));
+  assert.deepEqual(lastStock, [['totem', 2]]);
+  await runDelivery(fakeWorld({ stock: 0 }));
+  assert.deepEqual(lastStock, [['totem', 0]], 'out of stock is recorded too');
 });

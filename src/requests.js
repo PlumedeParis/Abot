@@ -7,6 +7,7 @@
 const { KIT_NAMES } = require('./config');
 const limits = require('./limits');
 const linking = require('./linking');
+const bans = require('./bans');
 
 function compilePatterns(patterns) {
   return patterns.map((p) => new RegExp(p));
@@ -109,6 +110,9 @@ function createRequestHandler({ db, getSettings, getRuntime, logger, checkMember
     if (runtime.stationReady === false) return reject(username, kit, 'not_set_up', 'The kit bot is not set up yet. Please try again later.', 'warn');
 
     const link = await linking.getActiveLinkByUsername(db, username);
+    if (await bans.findBan(db, { mcUsername: username, discordId: link ? link.discord_id : null })) {
+      return reject(username, kit, 'banned', 'You are banned from the kit bot.', 'warn');
+    }
     if (!link) {
       return reject(username, kit, 'not_linked', 'You must join our Discord and link your account first: run /link in Discord, then whisper me "!link <code>".');
     }
@@ -156,6 +160,11 @@ function createRequestHandler({ db, getSettings, getRuntime, logger, checkMember
   }
 
   async function handleLink(username, code, player, s) {
+    if (await bans.findBan(db, { mcUsername: username })) {
+      await logger.warn('link.failed', `Link attempt by ${username} refused: banned`);
+      await reply(username, 'You are banned from the kit bot.');
+      return { ok: false, reason: 'banned' };
+    }
     const res = await linking.completeLink(db, {
       mcUsername: username,
       mcUuid: player?.uuid || null,

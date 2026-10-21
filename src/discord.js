@@ -22,6 +22,7 @@ const { setStatus } = require('./database');
 const { fetchUnsentEvents, markEventsSent, markEventsFailed, pruneEvents } = require('./logging');
 const { isAuthorizedAdmin, createConfirmationStore, createAdminActions, SENSITIVE } = require('./admin');
 const linking = require('./linking');
+const bans = require('./bans');
 const { formatDuration } = require('./limits');
 
 const LEVEL_COLORS = { INFO: 0x3498db, WARNING: 0xf1c40f, ERROR: 0xe74c3c, ADMIN: 0x9b59b6 };
@@ -56,6 +57,14 @@ function buildCommands() {
     .addSubcommand((sc) => player(sc.setName('quota-reset').setDescription('Reset a player quota'), 'Minecraft username, @mention or Discord ID'))
     .addSubcommand((sc) => sc.setName('reload').setDescription('Reload non-secret settings'))
     .addSubcommand((sc) => sc.setName('recalibrate').setDescription('Re-detect the kit chests around the bot'))
+    .addSubcommand((sc) => sc.setName('stock').setDescription('Kits left in each chest'))
+    .addSubcommand((sc) =>
+      player(sc.setName('ban').setDescription('Ban a player from the kit bot'), 'Minecraft username, @mention or Discord ID').addStringOption((o) =>
+        o.setName('reason').setDescription('Why (shown in the logs)').setMaxLength(200)
+      )
+    )
+    .addSubcommand((sc) => player(sc.setName('unban').setDescription('Lift a ban'), 'Minecraft username, @mention or Discord ID'))
+    .addSubcommand((sc) => sc.setName('bans').setDescription('List banned players'))
     .addSubcommand((sc) =>
       sc
         .setName('say')
@@ -289,6 +298,45 @@ function createDiscordBot({ config, db, logger, checkMembership, onSettingsReloa
         embed.setTitle(r.ok ? 'Message queued' : 'Message refused').setDescription(r.ok ? `The bot will say in the Minecraft chat:\n> ${r.message}` : why[r.reason]);
         break;
       }
+      case 'stock': {
+        const { stock, lowThreshold } = await actions.stock();
+        const line = (kit) => {
+          const st = stock[kit];
+          if (!st) return `**${kit}**: unknown (counted the next time the bot opens this chest)`;
+          const icon = st.left === 0 ? '🔴' : st.left <= lowThreshold ? '🟠' : '🟢';
+          return `${icon} **${kit}**: ${st.left} kit(s) left · counted ${ts(st.checkedAt)}`;
+        };
+        embed.setTitle('Kit stock').setDescription(['totem', 'pvp', 'grief'].map(line).join('\n'));
+        break;
+      }
+      case 'ban': {
+        const r = await actions.ban(admin, interaction.options.getString('player', true), interaction.options.getString('reason'));
+        const why = { invalid: 'That is not a Minecraft username, @mention or Discord ID.', already_banned: 'That player is already banned.' };
+        embed
+          .setTitle(r.ok ? 'Player banned' : 'Ban not applied')
+          .setDescription(
+            r.ok
+              ? `${[r.mcUsername && `\`${r.mcUsername}\``, r.discordId && `<@${r.discordId}>`].filter(Boolean).join(' / ')} can no longer order kits or link accounts. Their waiting orders were cancelled.`
+              : why[r.reason]
+          );
+        break;
+      }
+      case 'unban': {
+        const n = await actions.unban(admin, interaction.options.getString('player', true));
+        embed.setTitle(n ? 'Ban lifted' : 'No ban found').setDescription(n ? 'The player can use the kit bot again.' : 'That player is not banned.');
+        break;
+      }
+      case 'bans': {
+        const list = await actions.bans();
+        embed
+          .setTitle(`Banned players (${list.length})`)
+          .setDescription(
+            list.length
+              ? clip(list.map((b) => `• ${[b.mc_username && `\`${b.mc_username}\``, b.discord_id && `<@${b.discord_id}>`].filter(Boolean).join(' / ')} · ${ts(b.created_at)}${b.reason ? ` · ${b.reason}` : ''}`).join('\n'), 4000)
+              : 'Nobody is banned.'
+          );
+        break;
+      }
       case 'recalibrate':
         await actions.recalibrate(admin);
         embed.setTitle('Recalibration requested').setDescription('When idle, the bot looks for the totem chest on its LEFT, pvp on its RIGHT and grief IN FRONT of it, from where it stands now. The result appears in the log channel.');
@@ -307,7 +355,7 @@ function createDiscordBot({ config, db, logger, checkMembership, onSettingsReloa
       default:
         embed.setTitle('KitBot admin commands').setDescription(actions.help().map(([c, d]) => `\`${c}\` — ${d}`).join('\n'));
     }
-    if (!['pause', 'resume', 'reload', 'recalibrate', 'say'].includes(sub)) await logger.admin(`admin.${sub}`, `${admin.tag} (${admin.id}) ran /kitbot ${sub}`);
+    if (!['pause', 'resume', 'reload', 'recalibrate', 'say', 'ban', 'unban'].includes(sub)) await logger.admin(`admin.${sub}`, `${admin.tag} (${admin.id}) ran /kitbot ${sub}`);
     return interaction.editReply({ embeds: [embed] });
   }
 
@@ -339,6 +387,10 @@ function createDiscordBot({ config, db, logger, checkMembership, onSettingsReloa
       return interaction.editReply(why[m.status] || 'You must be a member of this server to link an account.');
     }
     const name = interaction.options.getString('minecraft_username', true).trim();
+    if (await bans.findBan(db, { mcUsername: name, discordId: interaction.user.id })) {
+      await logger.warn('link.refused', `Link request by <@${interaction.user.id}> for ${name} refused: banned`);
+      return interaction.editReply('You are banned from the kit bot.');
+    }
     const replace = interaction.options.getString('replace');
     const r = await linking.startLink(db, { discordId: interaction.user.id, mcUsername: name, replaceUsername: replace, settings });
     if (!r.ok) {

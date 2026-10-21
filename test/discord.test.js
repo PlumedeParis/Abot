@@ -75,7 +75,7 @@ test('slash command definitions are valid', () => {
   const kitbot = cmds.find((c) => c.name === 'kitbot');
   assert.deepEqual(
     kitbot.options.map((o) => o.name),
-    ['status', 'stats', 'player', 'queue', 'pause', 'resume', 'maintenance', 'unlink', 'cooldown-reset', 'quota-reset', 'reload', 'recalibrate', 'say', 'logs', 'help']
+    ['status', 'stats', 'player', 'queue', 'pause', 'resume', 'maintenance', 'unlink', 'cooldown-reset', 'quota-reset', 'reload', 'recalibrate', 'stock', 'ban', 'unban', 'bans', 'say', 'logs', 'help']
   );
   assert.equal(kitbot.default_member_permissions, '8', 'hidden from non-administrators by default');
   assert.ok(cmds.find((c) => c.name === 'link'));
@@ -83,7 +83,7 @@ test('slash command definitions are valid', () => {
 
 test('non-administrators cannot run /kitbot commands, even when invoking them directly', async () => {
   const { db, logger, bot } = await setup();
-  for (const sub of ['pause', 'maintenance', 'unlink', 'status', 'logs']) {
+  for (const sub of ['pause', 'maintenance', 'unlink', 'status', 'logs', 'ban', 'unban', 'stock', 'say']) {
     const it = fakeInteraction({ userId: OTHER, sub, options: { enabled: true, player: 'Alice' } });
     await dispatch(bot, it);
     assert.equal(it.calls[0][0], 'reply');
@@ -91,7 +91,8 @@ test('non-administrators cannot run /kitbot commands, even when invoking them di
   }
   assert.equal(await getSetting(db, 'paused', false), false);
   assert.equal(await getSetting(db, 'maintenance', false), false);
-  assert.ok(logger.events.filter((e) => e.type === 'admin.denied').length >= 5);
+  assert.ok(logger.events.filter((e) => e.type === 'admin.denied').length >= 9);
+  assert.equal((await db.get('SELECT COUNT(*) AS n FROM bans')).n, 0, 'no ban created by a non-admin');
 
   // An allowlisted admin calling from another guild is refused too.
   const wrongGuild = fakeInteraction({ userId: ADMIN_ID, guildId: '333333333333333333', sub: 'pause' });

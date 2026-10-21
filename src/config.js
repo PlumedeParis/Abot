@@ -114,6 +114,10 @@ const DEFAULTS = {
     pickupTimeoutMs: 15000,
     returnUndelivered: true
   },
+  stock: {
+    // Alert in the log channel when a kit chest has this many kits or fewer.
+    lowThreshold: 5
+  },
   kits: {
     totem: { direction: 'left', distance: null, standAt: null, retrieval: { method: 'chest', container: null, items: [{ nameRegex: 'shulker_box$', count: 1 }] } },
     pvp: { direction: 'right', distance: null, standAt: null, retrieval: { method: 'chest', container: null, items: [{ nameRegex: 'shulker_box$', count: 1 }] } },
@@ -225,6 +229,7 @@ function validateSettings(s, { allowPlaceholders = false } = {}) {
   positive('linking.codeTtlMinutes', s.linking.codeTtlMinutes);
   positive('linking.usernameChangeCooldownDays', s.linking.usernameChangeCooldownDays);
   positive('chat.maxLength', s.chat.maxLength);
+  if (!Number.isInteger(s.stock.lowThreshold) || s.stock.lowThreshold < 0) errors.push('stock.lowThreshold: must be a whole number (0 or more)');
 
   if (!/^![a-z]+$/i.test(s.chat.kitCommand)) errors.push('chat.kitCommand: must look like "!kit"');
   if (!/^![a-z]+$/i.test(s.chat.linkCommand)) errors.push('chat.linkCommand: must look like "!link"');

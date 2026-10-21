@@ -10,6 +10,8 @@ const linking = require('./linking');
 const limits = require('./limits');
 const { queueSnapshot, globalStats, playerStats } = require('./queue');
 const { recentEvents } = require('./logging');
+const bans = require('./bans');
+const { readStock } = require('./stock');
 
 const SENSITIVE = new Set(['unlink', 'cooldown-reset', 'quota-reset', 'maintenance']);
 
@@ -27,6 +29,10 @@ const HELP = [
   ['/kitbot reload', 'Reload non-secret settings'],
   ['/kitbot recalibrate', 'Re-detect the kit chests around the bot'],
   ['/kitbot say <message>', 'Send a message in the Minecraft chat as the bot'],
+  ['/kitbot stock', 'Kits left in each chest'],
+  ['/kitbot ban <player> [reason]', 'Ban a player from the kit bot'],
+  ['/kitbot unban <player>', 'Lift a ban'],
+  ['/kitbot bans', 'List banned players'],
   ['/kitbot logs', 'Recent events'],
   ['/kitbot help', 'This list']
 ];
@@ -184,6 +190,28 @@ function createAdminActions({ db, logger, getSettings, onReload = () => {} }) {
       await db.run('INSERT INTO chat_outbox (message, requested_by, created_at) VALUES (?, ?, ?)', [message, admin.id, Date.now()]);
       await audit(admin, 'say', message);
       return { ok: true, message };
+    },
+    async ban(admin, player, reason) {
+      const r = await bans.banPlayer(db, { query: player, reason, bannedBy: admin.id });
+      if (r.ok) {
+        const who = [r.mcUsername, r.discordId && `<@${r.discordId}>`].filter(Boolean).join(' / ');
+        await audit(admin, 'ban', `${who}${reason ? ` (${reason})` : ''}`);
+        await logger.warn('player.banned', `${who} was banned from the kit bot${reason ? `: ${reason}` : ''}.`);
+      }
+      return r;
+    },
+    async unban(admin, player) {
+      const n = await bans.unbanPlayer(db, player);
+      if (n) {
+        await audit(admin, 'unban', player);
+        await logger.info('player.unbanned', `${player} can use the kit bot again.`);
+      }
+      return n;
+    },
+    bans: () => bans.listBans(db),
+    async stock() {
+      const stock = await readStock(db);
+      return { stock, lowThreshold: getSettings().stock.lowThreshold };
     },
     async recalibrate(admin) {
       await setSetting(db, 'station_recalibrate_at', Date.now());

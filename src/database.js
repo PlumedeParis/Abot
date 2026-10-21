@@ -128,6 +128,23 @@ const MIGRATIONS = [
       )`,
       'CREATE INDEX IF NOT EXISTS chat_outbox_pending ON chat_outbox (sent_at, id)'
     ]
+  },
+  {
+    // Players banned from the kit bot by an administrator.
+    version: 3,
+    statements: (d) => [
+      `CREATE TABLE IF NOT EXISTS bans (
+        id ${d.id},
+        mc_username_lower TEXT,
+        mc_username TEXT,
+        discord_id TEXT,
+        reason TEXT,
+        banned_by TEXT NOT NULL,
+        created_at BIGINT NOT NULL
+      )`,
+      'CREATE INDEX IF NOT EXISTS bans_username ON bans (mc_username_lower)',
+      'CREATE INDEX IF NOT EXISTS bans_discord ON bans (discord_id)'
+    ]
   }
 ];
 

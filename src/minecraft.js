@@ -13,6 +13,7 @@ const { createRequestHandler, compilePatterns, parseChatLine, parseSignedChat } 
 const { createQueue, recoverInterrupted } = require('./queue');
 const { createKitService } = require('./kits');
 const linking = require('./linking');
+const { recordStock } = require('./stock');
 const { detectStation, applyStation, describeStation } = require('./station');
 
 const MC_MAX_CHAT = 256;
@@ -111,7 +112,8 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
     onChatLine: (fn) => {
       chatLineListeners.add(fn);
       return () => chatLineListeners.delete(fn);
-    }
+    },
+    onStock: (kit, left) => recordStock(db, logger, { kit, left, lowThreshold: settings.stock.lowThreshold })
   });
 
   const queue = createQueue({
