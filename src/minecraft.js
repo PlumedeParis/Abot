@@ -253,6 +253,10 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
         for (const cmd of settings.auth.postLoginCommands) await sendCommand(cmd);
         runtime.minecraftReady = true;
         await ensureStation();
+        const free = current.inventory.emptySlotCount();
+        if (free < 2) {
+          await logger.warn('inventory.full', `The bot has only ${free} free inventory slot(s), so it cannot take kits out of the chests. Log in as the bot and empty its inventory.`);
+        }
         await logger.info('minecraft.ready', runtime.stationReady ? 'Logged in and ready to deliver kits.' : 'Logged in, but kit deliveries are disabled until the kit station is found.');
         stableTimer = setTimeout(() => (reconnectAttempt = 0), 60000);
         queue.poke();

@@ -72,7 +72,14 @@ function fakeWorld({ stock = 1, pickup = 'target' } = {}) {
   };
   bot.blockAt = (v) => ({ name: 'chest', position: v });
   const chestItems = Array.from({ length: stock }, () => ({ name: 'white_shulker_box', type: 7, count: 1 }));
-  bot.openContainer = async () => ({
+  bot.closeWindow = () => {};
+  bot.openCalls = [];
+  bot.openContainer = async (block, direction, cursor) => {
+    bot.openCalls.push({ direction, cursor });
+    if (bot.ignoreClicks && bot.ignoreClicks-- > 0) return new Promise(() => {}); // server ignores the click
+    return openWindow();
+  };
+  const openWindow = () => ({
     containerItems: () => chestItems.filter((i) => i.count > 0),
     withdraw: async (type, meta, count) => {
       const it = chestItems.find((i) => i.type === type && i.count > 0);
@@ -264,4 +271,30 @@ test('teleport delivery posts a location report (Discord only) with nearby conta
   assert.match(evt.details, /on the ground: 2/);
   assert.match(evt.details, /Other players nearby: Bob/);
   assert.match(evt.details, /Kit: \*\*totem\*\* for \*\*Alice\*\*/);
+});
+
+// ---- opening chests -----------------------------------------------------------
+
+test('the bot clicks the side of the chest that faces it, like a player', () => {
+  const bot = { entity: { position: new Vec3(100.5, 64, 200.5), eyeHeight: 1.62 } };
+  // Totem chest directly west of the bot (same level): click its east face.
+  let f = kits.clickFace(bot, { position: new Vec3(99, 64, 200) });
+  assert.deepEqual(f.direction, new Vec3(1, 0, 0));
+  assert.deepEqual(f.cursor, new Vec3(1, 0.5, 0.5));
+  // Grief chest two blocks north: click its south face.
+  f = kits.clickFace(bot, { position: new Vec3(100, 64, 198) });
+  assert.deepEqual(f.direction, new Vec3(0, 0, 1));
+  assert.deepEqual(f.cursor, new Vec3(0.5, 0.5, 1));
+  // Chest right below the bot: click its top.
+  f = kits.clickFace(bot, { position: new Vec3(100, 63, 200) });
+  assert.deepEqual(f.direction, new Vec3(0, 1, 0));
+});
+
+test('if the server ignores the first click, the bot retries and still delivers', async () => {
+  const world = fakeWorld();
+  world.bot.ignoreClicks = 1;
+  const { row } = await runDelivery(world);
+  assert.equal(row.status, 'delivered');
+  assert.equal(world.bot.openCalls.length, 2);
+  assert.deepEqual(world.bot.openCalls[1].direction, new Vec3(0, 1, 0), 'second try uses the top face');
 });

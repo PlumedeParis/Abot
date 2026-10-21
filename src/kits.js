@@ -82,6 +82,24 @@ function missingItems(inventoryItems, specs) {
 
 // ---- mineflayer helpers ---------------------------------------------------
 
+// The face of `block` that points towards the bot's eyes, and the click
+// position on it (0..1 within the block). Side faces are preferred when the
+// bot is beside the block.
+function clickFace(bot, block) {
+  const eye = bot.entity.position.offset(0, bot.entity.eyeHeight || 1.62, 0);
+  const d = { x: eye.x - (block.position.x + 0.5), y: eye.y - (block.position.y + 0.5), z: eye.z - (block.position.z + 0.5) };
+  const top = 0.875; // chests are 14/16 of a block high
+  if (Math.max(Math.abs(d.x), Math.abs(d.z)) >= 0.5) {
+    if (Math.abs(d.x) >= Math.abs(d.z)) {
+      const s = Math.sign(d.x);
+      return { direction: new Vec3(s, 0, 0), cursor: new Vec3(s > 0 ? 1 : 0, 0.5, 0.5) };
+    }
+    const s = Math.sign(d.z);
+    return { direction: new Vec3(0, 0, s), cursor: new Vec3(0.5, 0.5, s > 0 ? 1 : 0) };
+  }
+  return d.y >= 0 ? { direction: new Vec3(0, 1, 0), cursor: new Vec3(0.5, top, 0.5) } : { direction: new Vec3(0, -1, 0), cursor: new Vec3(0.5, 0, 0.5) };
+}
+
 function withTimeout(promise, ms, message, onTimeout) {
   let timer;
   return Promise.race([
@@ -147,8 +165,29 @@ function createKitService({ getBot, getSettings, logger, sendCommand, onChatLine
     if (!/chest|barrel|shulker_box/.test(block.name)) throw new DeliveryError(`no container at the kit location (found ${block.name})`);
     const dist = bot.entity.position.distanceTo(block.position.offset(0.5, 0.5, 0.5));
     if (dist > 4.5) throw new DeliveryError('kit container is out of reach');
-    checkAbort(signal);
-    return withTimeout(bot.openContainer(block), 10000, 'timed out opening the kit container');
+    // Click the face of the container that points at the bot, with the click
+    // position on that face, like a player would. Mineflayer's default (top
+    // face, centre of the block) can be ignored by anti-cheat plugins. If no
+    // window opens, retry, once on the top face as a fallback.
+    const attempts = [clickFace(bot, block), { direction: new Vec3(0, 1, 0), cursor: new Vec3(0.5, 0.875, 0.5) }, clickFace(bot, block)];
+    const errors = [];
+    for (const { direction, cursor } of attempts) {
+      checkAbort(signal);
+      if (bot.currentWindow) {
+        try {
+          bot.closeWindow(bot.currentWindow);
+        } catch {
+          // already closed
+        }
+      }
+      try {
+        return await withTimeout(bot.openContainer(block, direction, cursor), 5000, 'no chest window opened');
+      } catch (e) {
+        errors.push(e.message);
+        await new Promise((r) => setTimeout(r, 500));
+      }
+    }
+    throw new DeliveryError(`could not open the kit container at ${block.name} (${errors.join('; ')})`);
   }
 
   async function retrieveFromChest(kitName, kit, signal) {
@@ -459,6 +498,7 @@ function createKitService({ getBot, getSettings, logger, sendCommand, onChatLine
 }
 
 module.exports = {
+  clickFace,
   f3DegreesToYaw,
   homeYaw,
   directionVector,
