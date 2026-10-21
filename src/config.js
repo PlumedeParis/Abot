@@ -44,6 +44,8 @@ const DEFAULTS = {
     replyCommand: '/msg {player} {message}',
     minDelayMs: 1500,
     maxLength: 240,
+    // Public message after each confirmed delivery ("" to turn it off).
+    deliveryAnnouncement: '{player} just received a {kit} kit. Order one yourself by doing !kit totem/pvp/grief',
     perPlayerCommandIntervalMs: 3000,
     duplicateWindowMs: 5000,
     requireOnlinePlayer: true,

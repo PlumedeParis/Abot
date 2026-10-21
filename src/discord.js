@@ -56,6 +56,12 @@ function buildCommands() {
     .addSubcommand((sc) => player(sc.setName('quota-reset').setDescription('Reset a player quota'), 'Minecraft username, @mention or Discord ID'))
     .addSubcommand((sc) => sc.setName('reload').setDescription('Reload non-secret settings'))
     .addSubcommand((sc) => sc.setName('recalibrate').setDescription('Re-detect the kit chests around the bot'))
+    .addSubcommand((sc) =>
+      sc
+        .setName('say')
+        .setDescription('Send a message in the Minecraft chat as the bot')
+        .addStringOption((o) => o.setName('message').setDescription('Text to send (no commands)').setRequired(true).setMaxLength(240))
+    )
     .addSubcommand((sc) => sc.setName('logs').setDescription('Show recent events'))
     .addSubcommand((sc) => sc.setName('help').setDescription('List administrator commands'));
 
@@ -277,6 +283,12 @@ function createDiscordBot({ config, db, logger, checkMembership, onSettingsReloa
         await actions.resume(admin);
         embed.setTitle('Deliveries resumed');
         break;
+      case 'say': {
+        const r = await actions.say(admin, interaction.options.getString('message', true));
+        const why = { empty: 'The message is empty.', command: 'Commands (starting with /) cannot be sent this way.', too_long: 'The message is too long (256 characters max).' };
+        embed.setTitle(r.ok ? 'Message queued' : 'Message refused').setDescription(r.ok ? `The bot will say in the Minecraft chat:\n> ${r.message}` : why[r.reason]);
+        break;
+      }
       case 'recalibrate':
         await actions.recalibrate(admin);
         embed.setTitle('Recalibration requested').setDescription('When idle, the bot looks for the totem chest on its LEFT, pvp on its RIGHT and grief IN FRONT of it, from where it stands now. The result appears in the log channel.');
@@ -295,7 +307,7 @@ function createDiscordBot({ config, db, logger, checkMembership, onSettingsReloa
       default:
         embed.setTitle('KitBot admin commands').setDescription(actions.help().map(([c, d]) => `\`${c}\` — ${d}`).join('\n'));
     }
-    if (!['pause', 'resume', 'reload', 'recalibrate'].includes(sub)) await logger.admin(`admin.${sub}`, `${admin.tag} (${admin.id}) ran /kitbot ${sub}`);
+    if (!['pause', 'resume', 'reload', 'recalibrate', 'say'].includes(sub)) await logger.admin(`admin.${sub}`, `${admin.tag} (${admin.id}) ran /kitbot ${sub}`);
     return interaction.editReply({ embeds: [embed] });
   }
 

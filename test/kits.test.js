@@ -315,3 +315,13 @@ test('no delivery report when the kit never left the bot', async () => {
   await runDelivery(world, TELEPORT);
   assert.ok(!lastLogger.events.some((e) => e.type === 'delivery.report'));
 });
+
+test('delivery announcement text', () => {
+  const { deliveryAnnouncement } = require('../src/minecraft');
+  const { DEFAULTS } = require('../src/config');
+  assert.equal(
+    deliveryAnnouncement(DEFAULTS.chat.deliveryAnnouncement, { mc_username: 'Steve', kit: 'totem' }),
+    'Steve just received a totem kit. Order one yourself by doing !kit totem/pvp/grief'
+  );
+  assert.equal(deliveryAnnouncement('', { mc_username: 'Steve', kit: 'totem' }), '');
+});

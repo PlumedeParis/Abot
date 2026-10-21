@@ -26,6 +26,7 @@ const HELP = [
   ['/kitbot quota-reset <player>', 'Reset a player quota (confirmation)'],
   ['/kitbot reload', 'Reload non-secret settings'],
   ['/kitbot recalibrate', 'Re-detect the kit chests around the bot'],
+  ['/kitbot say <message>', 'Send a message in the Minecraft chat as the bot'],
   ['/kitbot logs', 'Recent events'],
   ['/kitbot help', 'This list']
 ];
@@ -169,6 +170,20 @@ function createAdminActions({ db, logger, getSettings, onReload = () => {} }) {
       await setSetting(db, 'reload_requested_at', Date.now());
       await audit(admin, 'reload', `from ${source.startsWith('/') ? 'config file' : source}`);
       return { ok: true };
+    },
+    // Queues a public chat message; the Minecraft bot sends it within seconds.
+    // Commands ("/...") are refused so this cannot run commands as the bot.
+    async say(admin, text) {
+      const message = String(text || '')
+        .replace(/[\u0000-\u001f\u007f§]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!message) return { ok: false, reason: 'empty' };
+      if (message.startsWith('/')) return { ok: false, reason: 'command' };
+      if (message.length > 256) return { ok: false, reason: 'too_long' };
+      await db.run('INSERT INTO chat_outbox (message, requested_by, created_at) VALUES (?, ?, ?)', [message, admin.id, Date.now()]);
+      await audit(admin, 'say', message);
+      return { ok: true, message };
     },
     async recalibrate(admin) {
       await setSetting(db, 'station_recalibrate_at', Date.now());

@@ -113,6 +113,21 @@ const MIGRATIONS = [
       'CREATE INDEX IF NOT EXISTS events_unsent ON events (sent_at, id)',
       'CREATE INDEX IF NOT EXISTS events_created ON events (created_at)'
     ]
+  },
+  {
+    // Messages that administrators send to the Minecraft chat from Discord.
+    version: 2,
+    statements: (d) => [
+      `CREATE TABLE IF NOT EXISTS chat_outbox (
+        id ${d.id},
+        message TEXT NOT NULL,
+        requested_by TEXT NOT NULL,
+        created_at BIGINT NOT NULL,
+        sent_at BIGINT,
+        error TEXT
+      )`,
+      'CREATE INDEX IF NOT EXISTS chat_outbox_pending ON chat_outbox (sent_at, id)'
+    ]
   }
 ];
 

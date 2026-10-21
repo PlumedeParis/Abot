@@ -25,6 +25,11 @@ function sanitizeOutgoing(text, maxLength) {
     .slice(0, Math.min(maxLength, MC_MAX_CHAT));
 }
 
+function deliveryAnnouncement(template, req) {
+  if (!template) return '';
+  return fill(template, { player: req.mc_username, kit: req.kit });
+}
+
 function fill(template, values) {
   return template.replace(/\{(\w+)\}/g, (m, k) => (k in values ? values[k] : m));
 }
@@ -129,8 +134,11 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
       if (!getOnlinePlayer(req.mc_username)) return { ok: false, reason: 'player is offline' };
       return { ok: true };
     },
-    deliver: (req, ctx) =>
-      kitService.deliver(req, { ...ctx, notify: (msg) => reply(req.mc_username, msg) }, abortController ? abortController.signal : null),
+    deliver: async (req, ctx) => {
+      const result = await kitService.deliver(req, { ...ctx, notify: (msg) => reply(req.mc_username, msg) }, abortController ? abortController.signal : null);
+      if (result && result.outcome === 'delivered') await announceDelivery(req);
+      return result;
+    },
     notify: (req, msg) => (getOnlinePlayer(req.mc_username) ? reply(req.mc_username, msg) : Promise.resolve())
   });
 
@@ -312,8 +320,43 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
     });
   }
 
+  // Public chat line after a confirmed delivery; never affects the delivery itself.
+  async function announceDelivery(req) {
+    const text = deliveryAnnouncement(settings.chat.deliveryAnnouncement, req);
+    if (!text) return;
+    try {
+      await sendRaw(sanitizeOutgoing(text, MC_MAX_CHAT));
+    } catch {
+      // disconnected: skip the announcement
+    }
+  }
+
+  // Messages queued from Discord with /kitbot say. Old ones (bot offline for
+  // a while) are dropped instead of being flooded into the chat later.
+  async function flushChatOutbox() {
+    if (!runtime.minecraftReady) return;
+    const now = Date.now();
+    await db.run("UPDATE chat_outbox SET sent_at = ?, error = 'expired' WHERE sent_at IS NULL AND created_at < ?", [now, now - 10 * 60000]);
+    const rows = await db.all('SELECT * FROM chat_outbox WHERE sent_at IS NULL ORDER BY id LIMIT 5');
+    for (const row of rows) {
+      const text = sanitizeOutgoing(row.message, MC_MAX_CHAT);
+      if (!text || text.startsWith('/')) {
+        await db.run("UPDATE chat_outbox SET sent_at = ?, error = 'refused' WHERE id = ?", [Date.now(), row.id]);
+        continue;
+      }
+      try {
+        await sendRaw(text);
+        await db.run('UPDATE chat_outbox SET sent_at = ? WHERE id = ?', [Date.now(), row.id]);
+        await logger.info('chat.sent', `Sent to the Minecraft chat (requested by <@${row.requested_by}>): ${text}`);
+      } catch {
+        return; // disconnected: retry on the next refresh
+      }
+    }
+  }
+
   // ---- shared state refresh (pause / maintenance / reload from Discord) ----
   async function refreshRuntime() {
+    await flushChatOutbox();
     const recalibrateAt = await getSetting(db, 'station_recalibrate_at', null);
     if (lastRecalibrateAt === null) lastRecalibrateAt = recalibrateAt;
     else if (recalibrateAt !== lastRecalibrateAt && runtime.minecraftReady && !queue.current()) {
@@ -455,4 +498,4 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
   return { start, stop, runtime, queue, getSettings };
 }
 
-module.exports = { createMinecraftBot, sanitizeOutgoing, fill };
+module.exports = { createMinecraftBot, sanitizeOutgoing, fill, deliveryAnnouncement };

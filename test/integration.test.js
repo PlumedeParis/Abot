@@ -15,6 +15,7 @@ const { sqliteDb, testSettings, fakeLogger, member } = require('./helpers');
 
 function startFakeServer({ port, registered }) {
   const commands = [];
+  const chats = [];
   const server = mc.createServer({ 'online-mode': false, version: '1.21.11', port, hideErrors: true });
   const clients = [];
   const say = (client, text) => client.write('system_chat', { content: nbt.comp({ text: nbt.string(text) }), isActionBar: false });
@@ -31,9 +32,11 @@ function startFakeServer({ port, registered }) {
       if (command.startsWith('reg ')) say(client, 'Successfully registered!');
       if (command.startsWith('log ')) say(client, 'Successful login!');
     });
+    client.on('chat_message', ({ message }) => chats.push(message));
   });
   return {
     commands,
+    chats,
     say: (text) => clients.forEach((c) => say(c, text)),
     addPlayer: (name, uuid) =>
       clients.forEach((c) =>
@@ -105,6 +108,13 @@ test('real protocol: /reg on first join, /log afterwards, chat commands and link
   await new Promise((r) => setTimeout(r, 500));
   assert.ok(!srv.commands.some((c) => c.startsWith('msg Mallory')));
   assert.ok(srv.commands.every((c) => !c.includes('undefined')));
+
+  // An admin message queued from Discord (/kitbot say) appears in the public chat.
+  const { createAdminActions } = require('../src/admin');
+  const actions = createAdminActions({ db, logger, getSettings: () => settings });
+  assert.equal((await actions.say({ id: '111111111111111111', tag: 'admin' }, '/kill')).reason, 'command');
+  assert.equal((await actions.say({ id: '111111111111111111', tag: 'admin' }, 'Kits are back!\nJoin our Discord')).ok, true);
+  assert.ok(await waitFor(() => srv.chats.includes('Kits are back! Join our Discord'), 8000), `chat: ${JSON.stringify(srv.chats)}`);
 
   await bot.stop();
   srv.close();

@@ -99,7 +99,7 @@ Players then use `/link minecraft_username:<name>` in Discord, whisper `!link <c
 | `src/membership.js` | Live Discord membership check (REST) |
 | `src/discord.js` / `src/admin.js` | Slash commands, confirmations, admin actions, log channel |
 | `scripts/` | Config validator, syntax check, bounded supervisor for GitHub Actions |
-| `test/` | 135 automated tests (see [§8](#8-run-the-tests)) |
+| `test/` | 136 automated tests (see [§8](#8-run-the-tests)) |
 
 ---
 
@@ -138,7 +138,7 @@ Normal chat is ignored. A message counts only if it **starts** with `!kit` / `!l
 
 **In Discord (players):** `/link minecraft_username:<name> [replace:<old name>]`, `/linkstatus`
 
-**In Discord (admins):** `/kitbot status | stats | player | queue | pause | resume | maintenance | unlink | cooldown-reset | quota-reset | reload | recalibrate | logs | help`. `unlink`, `cooldown-reset`, `quota-reset` and `maintenance` need a confirmation click from the **same** admin within 60 seconds. Every admin action is logged at the ADMIN level.
+**In Discord (admins):** `/kitbot status | stats | player | queue | pause | resume | maintenance | unlink | cooldown-reset | quota-reset | reload | recalibrate | say | logs | help`. `/kitbot say message:<text>` makes the bot write that text in the Minecraft chat within a few seconds (commands starting with `/` are refused; messages waiting more than 10 minutes because the bot is offline are dropped). `unlink`, `cooldown-reset`, `quota-reset` and `maintenance` need a confirmation click from the **same** admin within 60 seconds. Every admin action is logged at the ADMIN level.
 
 ## Policies
 
@@ -270,7 +270,7 @@ Build the station in game: a spot where the bot stands ("home"), with the **tote
 npm ci
 npm run check                    # syntax check
 npm run validate-config:example  # example settings structure
-npm test                         # 135 tests, about 2–3 minutes
+npm test                         # 136 tests, about 2–3 minutes
 ```
 The tests cover cooldowns (shared across kits), the rolling quota, refunds, the global 2-per-minute limit, one-pending-request races, restart persistence, linking (single-use codes, takeover protection, 30-day changes, history), access revocation when a member leaves, fail-closed Discord outages, admin permissions (non-admins, other guilds, forged confirmations), the guarantee that failed or unconfirmed deliveries are never reported as successful, secret redaction, and a real-protocol run against a fake 1.21.11 server. The `ci.yml` workflow runs all of this on every push.
 
@@ -379,6 +379,7 @@ These need your accounts or your hands in the game. Everything else has a defaul
 | `chat.patterns` | vanilla `<name> msg` + common whisper formats | Anchored regexes with `username` and `message` groups |
 | `chat.replyCommand` | `/msg {player} {message}` | How the bot answers players |
 | `chat.minDelayMs` | `1500` | Minimum gap between outgoing chat messages |
+| `chat.deliveryAnnouncement` | `{player} just received a {kit} kit. Order one yourself by doing !kit totem/pvp/grief` | Public chat message after each confirmed delivery; `""` turns it off |
 | `limits.cooldownMinutes` / `dailyQuota` / `quotaWindowHours` | `10` / `10` / `24` | Per-player limits |
 | `limits.globalPerMinute` / `maxQueueSize` / `maxQueueWaitMinutes` / `maxAttempts` | `2` / `20` / `30` / `2` | Queue limits |
 | `linking.maxLinksPerDiscord` / `codeTtlMinutes` / `usernameChangeCooldownDays` | `1` / `10` / `30` | Linking rules |
