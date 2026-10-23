@@ -335,3 +335,75 @@ test('the kits left in the chest are counted each time it is opened', async () =
   await runDelivery(fakeWorld({ stock: 0 }));
   assert.deepEqual(lastStock, [['totem', 0]], 'out of stock is recorded too');
 });
+
+test('block interactions get increasing sequence numbers like a real client', () => {
+  const sent = [];
+  const client = { write: (name, params) => sent.push([name, params]) };
+  kits.numberBlockInteractions(client);
+  client.write('block_place', { sequence: 0, hand: 0 });
+  client.write('position', { x: 1 });
+  client.write('block_place', { sequence: 0, hand: 0 });
+  client.write('use_item', { sequence: 0, hand: 0 });
+  assert.deepEqual(sent.map(([n, p]) => [n, p.sequence]), [['block_place', 1], ['position', undefined], ['block_place', 2], ['use_item', 3]]);
+});
+
+test('opening a chest does not re-aim at the block centre', async () => {
+  const calls = [];
+  const bot = {
+    lookAt: async (p) => calls.push(['lookAt', p]),
+    // Like mineflayer: openContainer -> activateBlock -> bot.lookAt(centre) synchronously.
+    openContainer(block, direction, cursor) {
+      this.lookAt(block.position.offset(0.5, 0.5, 0.5));
+      calls.push(['click', direction, cursor]);
+      return Promise.resolve('window');
+    }
+  };
+  const w = await kits.openWithoutReaim(bot, { position: new Vec3(0, 0, 0) }, new Vec3(1, 0, 0), new Vec3(1, 0.5, 0.5));
+  assert.equal(w, 'window');
+  assert.deepEqual(calls.map((c) => c[0]), ['click']);
+  await bot.lookAt('restored');
+  assert.deepEqual(calls.at(-1), ['lookAt', 'restored']);
+});
+
+test('the bot looks at the exact point it clicks before opening the chest', async () => {
+  const world = fakeWorld();
+  const looks = [];
+  world.bot.lookAt = async (p) => looks.push(p);
+  const { row } = await runDelivery(world);
+  assert.equal(row.status, 'delivered');
+  const click = world.bot.openCalls[0];
+  // Totem chest at (-4,64,0), bot standing at (-3,64,0): east face, point (-3, 64.5, 0.5).
+  assert.deepEqual(click.direction, new Vec3(1, 0, 0));
+  assert.ok(looks.some((p) => p.x === -3 && p.y === 64.5 && p.z === 0.5), JSON.stringify(looks));
+});
+
+test('a chest with a solid block on top (either half) is reported instead of clicked in vain', () => {
+  const reg = require('prismarine-registry')('1.21.11');
+  const Block = require('prismarine-block')(reg);
+  const make = (name, props) => {
+    const b = Block.fromStateId(reg.blocksByName[name].defaultState, 0);
+    if (props) {
+      // Find the state id of a chest with these properties.
+      const min = reg.blocksByName[name].minStateId;
+      const max = reg.blocksByName[name].maxStateId;
+      for (let id = min; id <= max; id++) {
+        const c = Block.fromStateId(id, 0);
+        const p = c.getProperties();
+        if (Object.entries(props).every(([k, v]) => p[k] === v)) return c;
+      }
+    }
+    return b;
+  };
+  // Double chest facing east (opening towards the bot at x=100), halves at z=200 and z=201.
+  const chest = make('chest', { facing: 'east', type: 'left', waterlogged: false });
+  chest.position = new Vec3(99, 64, 200);
+  const partner = make('chest', { facing: 'east', type: 'right', waterlogged: false });
+  const world = { '99,64,201': partner, '99,65,201': make('obsidian') };
+  const bot = { blockAt: (v) => world[`${v.x},${v.y},${v.z}`] || make('air'), entities: {} };
+  assert.deepEqual(kits.chestBlockers(bot, chest), ['a obsidian block is on top of the other half']);
+  world['99,65,201'] = make('glass');
+  world['99,65,200'] = make('oak_slab');
+  assert.deepEqual(kits.chestBlockers(bot, chest), [], 'glass and slabs do not block');
+  bot.entities = { 5: { name: 'cat', position: new Vec3(99.5, 64.9, 200.5) } };
+  assert.deepEqual(kits.chestBlockers(bot, chest), ['a cat is sitting on the half the bot uses']);
+});

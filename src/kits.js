@@ -82,6 +82,87 @@ function missingItems(inventoryItems, specs) {
 
 // ---- mineflayer helpers ---------------------------------------------------
 
+const CLOCKWISE = { north: 'east', east: 'south', south: 'west', west: 'north' };
+const STEP = { north: [0, -1], south: [0, 1], east: [1, 0], west: [-1, 0] };
+
+const isFullSolidBlock = (b) =>
+  !!b && b.transparent === false && Array.isArray(b.shapes) && b.shapes.length === 1 && b.shapes[0].join(',') === '0,0,0,1,1,1';
+
+// Minecraft does not open a chest when a full solid block (stone, obsidian...)
+// or a sitting cat is directly on top of it, or on top of the other half of a
+// double chest. Returns a description of each blocker, or [] if it can open.
+function chestBlockers(bot, block) {
+  if (!/(^|_)chest$/.test(block.name) || block.name === 'ender_chest') return [];
+  const halves = [block.position];
+  const props = typeof block.getProperties === 'function' ? block.getProperties() : {};
+  if ((props.type === 'left' || props.type === 'right') && STEP[props.facing]) {
+    // The other half is the chest beside it with the same facing and the opposite type.
+    const sides = [CLOCKWISE[props.facing], Object.keys(CLOCKWISE).find((k) => CLOCKWISE[k] === props.facing)];
+    const other = props.type === 'left' ? 'right' : 'left';
+    for (const dir of sides) {
+      const pos = block.position.offset(STEP[dir][0], 0, STEP[dir][1]);
+      const b = bot.blockAt(pos);
+      const p = b && b.name === block.name && typeof b.getProperties === 'function' ? b.getProperties() : null;
+      if (p && p.facing === props.facing && p.type === other) {
+        halves.push(pos);
+        break;
+      }
+    }
+  }
+  const blockers = [];
+  halves.forEach((pos, i) => {
+    const half = halves.length > 1 ? (i === 0 ? 'the half the bot uses' : 'the other half') : 'the chest';
+    const above = bot.blockAt(pos.offset(0, 1, 0));
+    if (isFullSolidBlock(above)) blockers.push(`a ${above.name} block is on top of ${half}`);
+    const cat = Object.values(bot.entities || {}).find(
+      (e) => e && e.name === 'cat' && e.position && Math.floor(e.position.x) === pos.x && Math.floor(e.position.z) === pos.z && Math.abs(e.position.y - (pos.y + 0.875)) < 0.6
+    );
+    if (cat) blockers.push(`a cat is sitting on ${half}`);
+  });
+  return blockers;
+}
+
+// bot.openContainer() first calls bot.lookAt(centre of the block). The bot is
+// already looking at the exact click point, so that call is skipped (it runs
+// synchronously at the start of openContainer, before its first await).
+function openWithoutReaim(bot, block, direction, cursor) {
+  const lookAt = bot.lookAt;
+  bot.lookAt = async () => {};
+  try {
+    return bot.openContainer(block, direction, cursor);
+  } finally {
+    bot.lookAt = lookAt;
+  }
+}
+
+// Sends the bot's current rotation right away (Mineflayer only sends it on its
+// next physics tick, which may come after the click).
+function sendRotation(bot) {
+  if (!bot._client || !bot.entity) return;
+  const onGround = !!bot.entity.onGround;
+  bot._client.write('look', {
+    yaw: Math.fround(((Math.PI - bot.entity.yaw) * 180) / Math.PI),
+    pitch: Math.fround((-bot.entity.pitch * 180) / Math.PI),
+    onGround,
+    flags: { onGround, hasHorizontalCollision: false }
+  });
+}
+
+// Mineflayer sends every block interaction with sequence number 0. Real
+// clients increase it with each interaction and some anti-cheat plugins
+// reject repeated numbers, so number them like a real client does.
+function numberBlockInteractions(client) {
+  const write = client.write.bind(client);
+  let sequence = 0;
+  client.write = (name, params) => {
+    if ((name === 'block_place' || name === 'use_item') && params && 'sequence' in params) {
+      sequence = sequence >= 2147483647 ? 1 : sequence + 1;
+      params = { ...params, sequence };
+    }
+    return write(name, params);
+  };
+}
+
 // The face of `block` that points towards the bot's eyes, and the click
 // position on it (0..1 within the block). Side faces are preferred when the
 // bot is beside the block.
@@ -166,29 +247,46 @@ function createKitService({ getBot, getSettings, logger, sendCommand, onChatLine
     if (!/chest|barrel|shulker_box/.test(block.name)) throw new DeliveryError(`no container at the kit location (found ${block.name})`);
     const dist = bot.entity.position.distanceTo(block.position.offset(0.5, 0.5, 0.5));
     if (dist > 4.5) throw new DeliveryError('kit container is out of reach');
-    // Click the face of the container that points at the bot, with the click
-    // position on that face, like a player would. Mineflayer's default (top
-    // face, centre of the block) can be ignored by anti-cheat plugins. If no
-    // window opens, retry, once on the top face as a fallback.
+    const blockers = chestBlockers(bot, block);
+    if (blockers.length) {
+      throw new DeliveryError(`the chest cannot be opened: ${blockers.join(' and ')}. Minecraft does not open a chest with a solid block or a cat on top of it; remove it`);
+    }
+    // Click like a player: look at the exact point on the face that points at
+    // the bot, give the server time to receive that rotation, then click that
+    // same point. Mineflayer would otherwise re-aim at the centre of the block,
+    // which from the bot's eyes is on the top face, so the look and the click
+    // disagree and anti-cheat plugins drop the click. If no window opens,
+    // retry, once on the top face as a fallback.
     const attempts = [clickFace(bot, block), { direction: new Vec3(0, 1, 0), cursor: new Vec3(0.5, 0.875, 0.5) }, clickFace(bot, block)];
     const errors = [];
-    for (const { direction, cursor } of attempts) {
-      checkAbort(signal);
-      if (bot.currentWindow) {
+    const serverLines = [];
+    const off = onChatLine((line) => serverLines.push(line));
+    try {
+      for (const { direction, cursor } of attempts) {
+        checkAbort(signal);
+        if (bot.currentWindow) {
+          try {
+            bot.closeWindow(bot.currentWindow);
+          } catch {
+            // already closed
+          }
+        }
         try {
-          bot.closeWindow(bot.currentWindow);
-        } catch {
-          // already closed
+          await bot.lookAt(block.position.offset(cursor.x, cursor.y, cursor.z), true);
+          sendRotation(bot); // make sure the server has the new rotation before the click
+          await new Promise((r) => setTimeout(r, 150));
+          return await withTimeout(openWithoutReaim(bot, block, direction, cursor), 5000, 'no chest window opened');
+        } catch (e) {
+          errors.push(e.message);
+          await new Promise((r) => setTimeout(r, 500));
         }
       }
-      try {
-        return await withTimeout(bot.openContainer(block, direction, cursor), 5000, 'no chest window opened');
-      } catch (e) {
-        errors.push(e.message);
-        await new Promise((r) => setTimeout(r, 500));
-      }
+    } finally {
+      off();
     }
-    throw new DeliveryError(`could not open the kit container at ${block.name} (${errors.join('; ')})`);
+    // Server messages during the attempts often say why (e.g. an anti-cheat or protection plugin).
+    const said = serverLines.slice(-3).map((l) => `"${l.slice(0, 120)}"`).join(', ');
+    throw new DeliveryError(`could not open the kit container at ${block.name} (${errors.join('; ')})${said ? `; server said: ${said}` : '; the server sent no message'}`);
   }
 
   async function retrieveFromChest(kitName, kit, signal) {
@@ -525,11 +623,14 @@ function createKitService({ getBot, getSettings, logger, sendCommand, onChatLine
     }
   }
 
-  return { deliver, goHome, isReturning: () => returning };
+  return { deliver, goHome, isReturning: () => returning, _openContainerAt: openContainerAt };
 }
 
 module.exports = {
+  chestBlockers,
   clickFace,
+  numberBlockInteractions,
+  openWithoutReaim,
   f3DegreesToYaw,
   homeYaw,
   directionVector,

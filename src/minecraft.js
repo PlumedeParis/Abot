@@ -11,7 +11,7 @@ const { getSetting, setSetting, setStatus } = require('./database');
 const { loadSettings } = require('./config');
 const { createRequestHandler, compilePatterns, parseChatLine, parseSignedChat } = require('./requests');
 const { createQueue, recoverInterrupted } = require('./queue');
-const { createKitService } = require('./kits');
+const { createKitService, numberBlockInteractions } = require('./kits');
 const linking = require('./linking');
 const { recordStock } = require('./stock');
 const { detectStation, applyStation, describeStation } = require('./station');
@@ -246,6 +246,7 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
       respawn: true
     });
     bot.loadPlugin(pathfinder);
+    numberBlockInteractions(bot._client);
     const current = bot;
 
     current.once('login', () => {
