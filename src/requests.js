@@ -65,9 +65,12 @@ function parseLooseCommand(line, chat, onlineNames) {
   for (const name of onlineNames) {
     if (!/^[A-Za-z0-9_]{1,16}$/.test(name)) continue;
     const nm = new RegExp(`(?<![A-Za-z0-9_])${name}(?![A-Za-z0-9_])`).exec(before);
-    if (nm && (!best || nm.index < best.index)) best = { username: name, index: nm.index };
+    if (nm && (!best || nm.index < best.index)) best = { username: name, index: nm.index, end: nm.index + name.length };
   }
   if (!best || best.index > 48) return null;
+  // Between the name and the command only separators and at most one word
+  // ("says", "whispers"): "Steve was slain by Mallory using !kit totem" is not Steve's command.
+  if ((before.slice(best.end).match(/[A-Za-z0-9_]+/g) || []).length > 1) return null;
   return { username: best.username, message: text.slice(cmdStart).trim() };
 }
 
@@ -227,9 +230,11 @@ function createRequestHandler({ db, getSettings, getRuntime, logger, checkMember
     const player = getOnlinePlayer(username);
     if (s.chat.requireOnlinePlayer && !player) {
       // not a real online player: possible spoof
-      await logger.warn('request.ignored', `Ignored "${message.slice(0, 40)}" from ${username}: no player with that exact name is in the tab list.`);
+      await logger.warn('request.ignored', `Ignored "${message.slice(0, 40)}" from ${username}: no player with that name is in the tab list.`);
       return null;
     }
+    // Use the tab-list spelling: the delivery looks the player up by exact name.
+    if (player && player.username) username = player.username;
     if (isDuplicateOrSpam(username, message, s)) {
       await logger.debug('request.ignored', `Ignored "${message.slice(0, 40)}" from ${username}: sent again too quickly (wait ${Math.ceil(s.chat.perPlayerCommandIntervalMs / 1000)}s between commands).`);
       return null;

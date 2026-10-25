@@ -218,8 +218,6 @@ function createKitService({ getBot, getSettings, logger, sendCommand, onChatLine
     if (!nav.allowPlacing) moves.scafoldingBlocks = [];
     moves.allowParkour = !!nav.allowParkour;
     moves.allowSprinting = !!nav.allowSprinting;
-    moves.canOpenDoors = true;
-    bot.pathfinder.thinkTimeout = 5000;
     bot.pathfinder.setMovements(moves);
   }
 

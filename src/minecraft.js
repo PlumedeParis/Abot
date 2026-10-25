@@ -46,6 +46,7 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
   let lastRecalibrateAt = null;
   let lastStationError = null;
   let lastStationAttempt = 0;
+  let detectingStation = false;
   let bot = null;
   let stopping = false;
   let reconnectTimer = null;
@@ -239,29 +240,30 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
     }, delay);
   }
 
-  const seenChat = new Map();
   function dispatchChat(current, username, message) {
-    if (username === current.username) return;
-    const t = Date.now();
-    const key = `${username}|${message}`;
-    if (t - (seenChat.get(key) || 0) < 1000) return; // same line seen through two events
-    seenChat.set(key, t);
-    if (seenChat.size > 200) for (const [k, v] of seenChat) if (t - v > 5000) seenChat.delete(k);
+    if (username.toLowerCase() === current.username.toLowerCase()) return;
     handleChat(username, message).catch((e) => logger.error('request.error', `Error handling a command from ${username}: ${e.message}`));
   }
 
-  // Idle behaviour of a normal player: look around now and then and swing an
+  // Idle behaviour of a normal player: glance around now and then and swing an
   // arm, so the client is not completely motionless (AFK kicks, bot detection).
+  // The bot always turns back to where it was facing: station detection reads
+  // its yaw, so it must not drift.
   function startHumanBehaviour(current) {
-    const timer = setInterval(() => {
-      if (bot !== current || !runtime.minecraftReady || queue.current() || !current.entity || current.currentWindow) return;
+    let glancing = false;
+    const timer = setInterval(async () => {
+      if (glancing || detectingStation || bot !== current || !runtime.minecraftReady || queue.current() || !current.entity || current.currentWindow) return;
+      glancing = true;
+      const { yaw, pitch } = current.entity;
       try {
-        const yaw = current.entity.yaw + (Math.random() - 0.5) * 0.6;
-        const pitch = Math.max(-0.5, Math.min(0.5, (Math.random() - 0.5) * 0.4));
-        current.look(yaw, pitch, false);
+        await current.look(yaw + (Math.random() - 0.5) * 0.8, Math.max(-0.4, Math.min(0.4, pitch + (Math.random() - 0.5) * 0.4)));
         if (Math.random() < 0.3) current.swingArm();
+        await new Promise((r) => setTimeout(r, 800 + Math.random() * 1200));
+        if (bot === current && !queue.current()) await current.look(yaw, pitch);
       } catch {
         // disconnected
+      } finally {
+        glancing = false;
       }
     }, 20000 + Math.floor(Math.random() * 20000));
     current.once('end', () => clearInterval(timer));
@@ -282,12 +284,7 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
       version: secrets.minecraft.version,
       hideErrors: true,
       checkTimeoutInterval: 60000,
-      respawn: true,
-      // Client settings of a normal player (Mineflayer defaults to a tiny view distance, a bot giveaway).
-      viewDistance: 'normal',
-      locale: 'en_US',
-      colorsEnabled: true,
-      chatLengthCap: 256
+      respawn: true
     });
     bot.loadPlugin(pathfinder);
     numberBlockInteractions(bot._client);
@@ -354,13 +351,9 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
       dispatchChat(current, parsed.username, parsed.message);
     });
 
-    // Mineflayer's own chat parsing is a second way to see the same commands.
-    // Duplicates are dropped in dispatchChat.
-    const onMineflayerChat = (username, message) => {
-      if (runtime.minecraftReady && typeof username === 'string' && typeof message === 'string') dispatchChat(current, username, message);
-    };
-    current.on('chat', onMineflayerChat);
-    current.on('whisper', onMineflayerChat);
+    // Mineflayer's own 'chat' / 'whisper' events are not used: their patterns are
+    // loose ("[Mallory] Alice whispers: !kit" is credited to Alice), so a player
+    // could request kits in someone else's name.
 
     startHumanBehaviour(current);
 
@@ -500,14 +493,20 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
     const b = bot;
     if (!b || !runtime.minecraftReady) return;
     lastStationAttempt = Date.now();
-    await waitUntilSettled(b);
-    const result = detectStation({
-      position: b.entity.position,
-      yaw: b.entity.yaw,
-      blockAt: (p) => b.blockAt(new Vec3(p.x, p.y, p.z)),
-      kits: settings.kits,
-      scanDistance: settings.navigation.scanDistance
-    });
+    detectingStation = true;
+    let result;
+    try {
+      await waitUntilSettled(b);
+      result = detectStation({
+        position: b.entity.position,
+        yaw: b.entity.yaw,
+        blockAt: (p) => b.blockAt(new Vec3(p.x, p.y, p.z)),
+        kits: settings.kits,
+        scanDistance: settings.navigation.scanDistance
+      });
+    } finally {
+      detectingStation = false;
+    }
     if (!result.ok) {
       runtime.stationReady = false;
       const msg = result.ambiguous

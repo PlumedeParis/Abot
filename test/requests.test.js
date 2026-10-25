@@ -165,7 +165,8 @@ test('parseLooseCommand finds the sender in unknown chat formats', () => {
   const names = ['Steve', 'Mallory'];
   assert.deepEqual(parseLooseCommand('★ Steve ➤ !kit totem', chat, names), { username: 'Steve', message: '!kit totem' });
   assert.deepEqual(parseLooseCommand('§aSteve§r » !KIT pvp', chat, names), { username: 'Steve', message: '!KIT pvp' });
-  assert.deepEqual(parseLooseCommand('Mallory: Steve says !kit totem', chat, names), { username: 'Mallory', message: '!kit totem' });
+  assert.equal(parseLooseCommand('Mallory: Steve says !kit totem', chat, names), null);
   assert.equal(parseLooseCommand('Nobody: !kit totem', chat, names), null);
   assert.equal(parseLooseCommand('Steve: use !kit totem please now', chat, names), null);
+  assert.equal(parseLooseCommand('Steve was slain by Mallory using !kit totem', chat, names), null);
 });
