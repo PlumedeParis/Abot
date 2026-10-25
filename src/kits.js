@@ -218,6 +218,8 @@ function createKitService({ getBot, getSettings, logger, sendCommand, onChatLine
     if (!nav.allowPlacing) moves.scafoldingBlocks = [];
     moves.allowParkour = !!nav.allowParkour;
     moves.allowSprinting = !!nav.allowSprinting;
+    moves.canOpenDoors = true;
+    bot.pathfinder.thinkTimeout = 5000;
     bot.pathfinder.setMovements(moves);
   }
 
@@ -229,6 +231,12 @@ function createKitService({ getBot, getSettings, logger, sendCommand, onChatLine
     try {
       await withTimeout(bot.pathfinder.goto(goal), timeoutMs, `could not reach ${what} within ${Math.round(timeoutMs / 1000)}s`, () => bot.pathfinder.stop());
     } catch (e) {
+      try {
+        bot.pathfinder.stop();
+        bot.clearControlStates(); // never leave keys held down after a failed walk
+      } catch {
+        // disconnected
+      }
       checkAbort(signal);
       if (e instanceof DeliveryError) throw e;
       throw new DeliveryError(`navigation to ${what} failed: ${e.message}`);

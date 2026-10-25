@@ -110,8 +110,11 @@ test('real protocol: /reg on first join, /log afterwards, chat commands and link
   assert.ok(srv.commands.every((c) => !c.includes('undefined')));
 
   // A command in a chat format the patterns do not know is reported with the raw line.
-  srv.say('* Alice says !kit totem');
-  assert.ok(await waitFor(() => logger.events.some((e) => e.type === 'chat.unreadable' && e.message.includes('* Alice says !kit totem'))));
+  srv.say('* Zed says !kit totem');
+  assert.ok(await waitFor(() => logger.events.some((e) => e.type === 'chat.unreadable' && e.message.includes('* Zed says !kit totem'))));
+  // ...but when the line starts with the name of an online player, the command is still understood.
+  srv.say('* Alice says !kit grief');
+  assert.ok(await waitFor(() => srv.commands.filter((c) => c.startsWith('msg Alice Kit deliveries are paused')).length >= 2));
   // A command from a name that is not in the tab list is ignored, and the log says why.
   srv.say('<Ghost> !kit totem');
   assert.ok(await waitFor(() => logger.events.some((e) => e.type === 'request.ignored' && e.message.includes('Ghost'))));

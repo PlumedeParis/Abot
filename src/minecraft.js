@@ -9,7 +9,7 @@ const { Vec3 } = require('vec3');
 const { pathfinder } = require('mineflayer-pathfinder');
 const { getSetting, setSetting, setStatus } = require('./database');
 const { loadSettings } = require('./config');
-const { createRequestHandler, compilePatterns, parseChatLine, parseSignedChat } = require('./requests');
+const { createRequestHandler, compilePatterns, parseChatLine, parseSignedChat, parseLooseCommand } = require('./requests');
 const { createQueue, recoverInterrupted } = require('./queue');
 const { createKitService, numberBlockInteractions } = require('./kits');
 const linking = require('./linking');
@@ -106,7 +106,11 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
 
   function getOnlinePlayer(username) {
     if (!bot || !bot.players) return null;
-    const p = bot.players[username];
+    let p = bot.players[username];
+    if (!p) {
+      const lower = username.toLowerCase();
+      p = Object.values(bot.players).find((x) => x.username && x.username.toLowerCase() === lower);
+    }
     if (!p) return null;
     return { username: p.username, uuid: p.uuid || null };
   }
@@ -235,6 +239,34 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
     }, delay);
   }
 
+  const seenChat = new Map();
+  function dispatchChat(current, username, message) {
+    if (username === current.username) return;
+    const t = Date.now();
+    const key = `${username}|${message}`;
+    if (t - (seenChat.get(key) || 0) < 1000) return; // same line seen through two events
+    seenChat.set(key, t);
+    if (seenChat.size > 200) for (const [k, v] of seenChat) if (t - v > 5000) seenChat.delete(k);
+    handleChat(username, message).catch((e) => logger.error('request.error', `Error handling a command from ${username}: ${e.message}`));
+  }
+
+  // Idle behaviour of a normal player: look around now and then and swing an
+  // arm, so the client is not completely motionless (AFK kicks, bot detection).
+  function startHumanBehaviour(current) {
+    const timer = setInterval(() => {
+      if (bot !== current || !runtime.minecraftReady || queue.current() || !current.entity || current.currentWindow) return;
+      try {
+        const yaw = current.entity.yaw + (Math.random() - 0.5) * 0.6;
+        const pitch = Math.max(-0.5, Math.min(0.5, (Math.random() - 0.5) * 0.4));
+        current.look(yaw, pitch, false);
+        if (Math.random() < 0.3) current.swingArm();
+      } catch {
+        // disconnected
+      }
+    }, 20000 + Math.floor(Math.random() * 20000));
+    current.once('end', () => clearInterval(timer));
+  }
+
   function connect() {
     if (stopping) return;
     abortController = new AbortController();
@@ -250,7 +282,12 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
       version: secrets.minecraft.version,
       hideErrors: true,
       checkTimeoutInterval: 60000,
-      respawn: true
+      respawn: true,
+      // Client settings of a normal player (Mineflayer defaults to a tiny view distance, a bot giveaway).
+      viewDistance: 'normal',
+      locale: 'en_US',
+      colorsEnabled: true,
+      chatLengthCap: 256
     });
     bot.loadPlugin(pathfinder);
     numberBlockInteractions(bot._client);
@@ -300,8 +337,12 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
       if (!runtime.minecraftReady) return;
       // Signed player chat carries the sender's UUID: use it when the player is known,
       // whatever the server's chat format looks like.
-      const signer = position === 'chat' && sender ? Object.values(current.players).find((p) => p.uuid === sender) : null;
-      const parsed = (signer && parseSignedChat(line, signer.username)) || parseChatLine(line, chatPatterns);
+      const signerName = position === 'chat' && sender ? (current.uuidToUsername && current.uuidToUsername[sender]) || Object.values(current.players).find((p) => p.uuid === sender)?.username : null;
+      const signer = signerName ? { username: signerName } : null;
+      const parsed =
+        (signer && parseSignedChat(line, signer.username)) ||
+        parseChatLine(line, chatPatterns) ||
+        (mentionsCommand(line) ? parseLooseCommand(line, settings.chat, Object.keys(current.players)) : null);
       if (!parsed) {
         // A command we could not attribute to a player: show the raw line so the chat patterns can be fixed.
         if (mentionsCommand(line) && Date.now() - lastUnreadableAt > 30000) {
@@ -310,9 +351,18 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
         }
         return;
       }
-      if (parsed.username === current.username) return;
-      handleChat(parsed.username, parsed.message).catch((e) => logger.error('request.error', `Error handling a command from ${parsed.username}: ${e.message}`));
+      dispatchChat(current, parsed.username, parsed.message);
     });
+
+    // Mineflayer's own chat parsing is a second way to see the same commands.
+    // Duplicates are dropped in dispatchChat.
+    const onMineflayerChat = (username, message) => {
+      if (runtime.minecraftReady && typeof username === 'string' && typeof message === 'string') dispatchChat(current, username, message);
+    };
+    current.on('chat', onMineflayerChat);
+    current.on('whisper', onMineflayerChat);
+
+    startHumanBehaviour(current);
 
     current.on('death', () => {
       if (kitService.isReturning()) logger.debug('minecraft.death', 'Respawning to return to base.');

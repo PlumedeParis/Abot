@@ -15,8 +15,15 @@ function compilePatterns(patterns) {
 
 // Extracts { username, message } from a chat line using the configured,
 // anchored patterns. Returns null for anything else (system messages, etc).
+// Colour codes and invisible characters some servers put in chat lines.
+function cleanLine(line) {
+  return String(line).replace(/§[0-9a-fk-or]/gi, '').replace(/[\u200b-\u200f\u2060\ufeff]/g, '');
+}
+
 function parseChatLine(line, compiled) {
-  if (typeof line !== 'string' || line.length > 512) return null;
+  if (typeof line !== 'string' || line.length > 1024) return null;
+  line = cleanLine(line);
+  if (line.length > 512) return null;
   for (const re of compiled) {
     const m = re.exec(line);
     if (m && m.groups && m.groups.username && m.groups.message !== undefined) {
@@ -31,13 +38,37 @@ function parseChatLine(line, compiled) {
 // only the message text has to be found: it follows the sender's name and a
 // separator such as ">", ":" or "»", whatever the chat format.
 function parseSignedChat(line, username) {
-  if (typeof line !== 'string' || line.length > 512) return null;
+  if (typeof line !== 'string' || line.length > 1024) return null;
+  line = cleanLine(line);
   const idx = line.indexOf(username);
   if (idx < 0) return null;
   const rest = line.slice(idx + username.length);
   const m = /^\s*(?:>|:|»|>>|\]|\)|-|\|)+\s*(.+)$/.exec(rest);
   if (!m) return null;
   return { username, message: m[1].trim() };
+}
+
+// Last resort when no chat pattern matches: the line contains a bot command and
+// starts with the name of a player who is online. The first online name in the
+// line is the sender (what a server puts first is the speaker, so a player cannot
+// pose as someone else by naming them later in the message).
+function parseLooseCommand(line, chat, onlineNames) {
+  if (typeof line !== 'string' || line.length > 1024) return null;
+  const text = cleanLine(line);
+  const esc = (c) => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`(?:^|[\\s>:»\\]\\)|-])(${esc(chat.kitCommand)}|${esc(chat.linkCommand)})(?:\\s+\\S+)?\\s*$`, 'i');
+  const m = re.exec(text);
+  if (!m) return null;
+  const cmdStart = m.index + m[0].toLowerCase().indexOf(m[1].toLowerCase());
+  const before = text.slice(0, cmdStart);
+  let best = null;
+  for (const name of onlineNames) {
+    if (!/^[A-Za-z0-9_]{1,16}$/.test(name)) continue;
+    const nm = new RegExp(`(?<![A-Za-z0-9_])${name}(?![A-Za-z0-9_])`).exec(before);
+    if (nm && (!best || nm.index < best.index)) best = { username: name, index: nm.index };
+  }
+  if (!best || best.index > 48) return null;
+  return { username: best.username, message: text.slice(cmdStart).trim() };
 }
 
 // Returns null when the message is not a bot command (normal chat is ignored).
@@ -225,4 +256,4 @@ function createRequestHandler({ db, getSettings, getRuntime, logger, checkMember
   };
 }
 
-module.exports = { compilePatterns, parseChatLine, parseSignedChat, parseCommand, createRequestHandler, LINK_ERRORS };
+module.exports = { compilePatterns, parseChatLine, parseSignedChat, parseLooseCommand, parseCommand, createRequestHandler, LINK_ERRORS };

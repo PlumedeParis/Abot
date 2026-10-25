@@ -158,3 +158,14 @@ test('requests are refused while the kit station has not been found', async () =
   assert.equal(r.reason, 'not_set_up');
   assert.equal(Number((await h.db.get('SELECT COUNT(*) AS n FROM requests')).n), 0);
 });
+
+test('parseLooseCommand finds the sender in unknown chat formats', () => {
+  const { parseLooseCommand } = require('../src/requests');
+  const chat = { kitCommand: '!kit', linkCommand: '!link' };
+  const names = ['Steve', 'Mallory'];
+  assert.deepEqual(parseLooseCommand('★ Steve ➤ !kit totem', chat, names), { username: 'Steve', message: '!kit totem' });
+  assert.deepEqual(parseLooseCommand('§aSteve§r » !KIT pvp', chat, names), { username: 'Steve', message: '!KIT pvp' });
+  assert.deepEqual(parseLooseCommand('Mallory: Steve says !kit totem', chat, names), { username: 'Mallory', message: '!kit totem' });
+  assert.equal(parseLooseCommand('Nobody: !kit totem', chat, names), null);
+  assert.equal(parseLooseCommand('Steve: use !kit totem please now', chat, names), null);
+});
