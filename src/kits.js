@@ -240,42 +240,29 @@ function createKitService({ getBot, getSettings, logger, sendCommand, onChatLine
     return getBot().inventory.items();
   }
 
-  // Puts the bot exactly on the centre of the block in front of the chest.
-  async function stepOnto(standAt, signal) {
+  async function openContainerAt(pos, signal) {
     const bot = getBot();
-    const centre = new Vec3(standAt.x + 0.5, bot.entity.position.y, standAt.z + 0.5);
-    if (bot.entity.position.distanceTo(centre) < 0.3) return;
-    configureMovements(bot);
-    const goal = new pathfinderLib.goals.GoalBlock(standAt.x, standAt.y, standAt.z);
-    try {
-      await withTimeout(bot.pathfinder.goto(goal), 10000, 'could not step in front of the chest', () => bot.pathfinder.stop());
-    } catch (e) {
-      checkAbort(signal);
-      await logger.debug('kit.open', `Could not step onto the spot in front of the chest: ${e.message}`);
-    }
-  }
-
-  // Opens a container like a player, and keeps trying: before each try the
-  // bot stands on the centre of its spot in front of the chest, looks at the
-  // exact point it clicks (alternating the side facing it and the top), sends
-  // that rotation to the server, then clicks. When no window opens, it looks
-  // away, comes back and tries again, up to navigation.chestOpenAttempts times.
-  async function openContainerAt(pos, signal, standAt = null) {
-    const bot = getBot();
-    const nav = getSettings().navigation;
     const block = bot.blockAt(new Vec3(pos.x, pos.y, pos.z));
     if (!block) throw new DeliveryError('kit container is not loaded');
     if (!/chest|barrel|shulker_box/.test(block.name)) throw new DeliveryError(`no container at the kit location (found ${block.name})`);
+    const dist = bot.entity.position.distanceTo(block.position.offset(0.5, 0.5, 0.5));
+    if (dist > 4.5) throw new DeliveryError('kit container is out of reach');
     const blockers = chestBlockers(bot, block);
     if (blockers.length) {
       throw new DeliveryError(`the chest cannot be opened: ${blockers.join(' and ')}. Minecraft does not open a chest with a solid block or a cat on top of it; remove it`);
     }
-    const attempts = nav.chestOpenAttempts;
+    // Click like a player: look at the exact point on the face that points at
+    // the bot, give the server time to receive that rotation, then click that
+    // same point. Mineflayer would otherwise re-aim at the centre of the block,
+    // which from the bot's eyes is on the top face, so the look and the click
+    // disagree and anti-cheat plugins drop the click. If no window opens,
+    // retry, once on the top face as a fallback.
+    const attempts = [clickFace(bot, block), { direction: new Vec3(0, 1, 0), cursor: new Vec3(0.5, 0.875, 0.5) }, clickFace(bot, block)];
     const errors = [];
     const serverLines = [];
     const off = onChatLine((line) => serverLines.push(line));
     try {
-      for (let i = 0; i < attempts; i++) {
+      for (const { direction, cursor } of attempts) {
         checkAbort(signal);
         if (bot.currentWindow) {
           try {
@@ -284,35 +271,14 @@ function createKitService({ getBot, getSettings, logger, sendCommand, onChatLine
             // already closed
           }
         }
-        if (standAt) await stepOnto(standAt, signal);
-        if (bot.entity.position.distanceTo(block.position.offset(0.5, 0.5, 0.5)) > 4.5) {
-          errors.push('out of reach');
-          continue;
-        }
-        // Alternate click points: side facing the bot, a bit higher on that side, then the top.
-        const side = clickFace(bot, block);
-        const variant = i % 3;
-        const { direction, cursor } =
-          variant === 2
-            ? { direction: new Vec3(0, 1, 0), cursor: new Vec3(0.5, 0.875, 0.5) }
-            : { direction: side.direction, cursor: variant === 1 && side.direction.y === 0 ? side.cursor.offset(0, 0.2, 0) : side.cursor };
         try {
           await bot.lookAt(block.position.offset(cursor.x, cursor.y, cursor.z), true);
           sendRotation(bot); // make sure the server has the new rotation before the click
-          await new Promise((r) => setTimeout(r, 250));
-          const window = await withTimeout(openWithoutReaim(bot, block, direction, cursor), nav.chestOpenTimeoutMs, 'no chest window opened');
-          if (i > 0) await logger.debug('kit.open', `Chest opened on try ${i + 1}.`);
-          return window;
+          await new Promise((r) => setTimeout(r, 150));
+          return await withTimeout(openWithoutReaim(bot, block, direction, cursor), 5000, 'no chest window opened');
         } catch (e) {
           errors.push(e.message);
-          // Look away, then come back to the chest on the next try.
-          try {
-            await bot.look(bot.entity.yaw + Math.PI, 0, true);
-            sendRotation(bot);
-          } catch {
-            // looking away is best effort
-          }
-          await new Promise((r) => setTimeout(r, 800));
+          await new Promise((r) => setTimeout(r, 500));
         }
       }
     } finally {
@@ -320,8 +286,7 @@ function createKitService({ getBot, getSettings, logger, sendCommand, onChatLine
     }
     // Server messages during the attempts often say why (e.g. an anti-cheat or protection plugin).
     const said = serverLines.slice(-3).map((l) => `"${l.slice(0, 120)}"`).join(', ');
-    const summary = [...new Set(errors)].map((e) => `${e} x${errors.filter((x) => x === e).length}`).join('; ');
-    throw new DeliveryError(`could not open the kit container at ${block.name} after ${attempts} tries (${summary})${said ? `; server said: ${said}` : '; the server sent no message'}`);
+    throw new DeliveryError(`could not open the kit container at ${block.name} (${errors.join('; ')})${said ? `; server said: ${said}` : '; the server sent no message'}`);
   }
 
   async function retrieveFromChest(kitName, kit, signal) {
@@ -333,7 +298,7 @@ function createKitService({ getBot, getSettings, logger, sendCommand, onChatLine
     const stacksNeeded = missing.reduce((n, m) => n + Math.ceil(m.missing / stackSize(m.spec)), 0);
     if (bot.inventory.emptySlotCount() < Math.min(stacksNeeded, 36)) throw new DeliveryError('bot inventory does not have enough free space');
 
-    const container = await openContainerAt(kit.retrieval.container, signal, resolveStandAt(getSettings(), kitName));
+    const container = await openContainerAt(kit.retrieval.container, signal);
     try {
       for (const { spec, missing: need } of missing) {
         const available = container.containerItems().filter((it) => itemMatches(it, spec));
@@ -461,7 +426,7 @@ function createKitService({ getBot, getSettings, logger, sendCommand, onChatLine
     const leftovers = inventoryItems().filter((it) => kit.retrieval.items.some((spec) => itemMatches(it, spec)));
     if (!leftovers.length) return;
     await goTo(resolveStandAt(getSettings(), kitName), getSettings().navigation.arriveRadius, kit.timeoutMs || getSettings().navigation.defaultTimeoutMs, signal, 'kit container');
-    const container = await openContainerAt(kit.retrieval.container, signal, resolveStandAt(getSettings(), kitName));
+    const container = await openContainerAt(kit.retrieval.container, signal);
     try {
       for (const it of leftovers) await container.deposit(it.type, null, it.count, it.nbt || null);
     } finally {

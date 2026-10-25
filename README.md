@@ -99,7 +99,7 @@ Players then use `/link minecraft_username:<name>` in Discord, whisper `!link <c
 | `src/membership.js` | Live Discord membership check (REST) |
 | `src/discord.js` / `src/admin.js` | Slash commands, confirmations, admin actions, log channel |
 | `scripts/` | Config validator, syntax check, bounded supervisor for GitHub Actions |
-| `test/` | 147 automated tests (see [§8](#8-run-the-tests)) |
+| `test/` | 145 automated tests (see [§8](#8-run-the-tests)) |
 
 ---
 
@@ -270,7 +270,7 @@ Build the station in game: a spot where the bot stands ("home"), with the **tote
 npm ci
 npm run check                    # syntax check
 npm run validate-config:example  # example settings structure
-npm test                         # 147 tests, about 2–3 minutes
+npm test                         # 145 tests, about 2–3 minutes
 ```
 The tests cover cooldowns (shared across kits), the rolling quota, refunds, the global 2-per-minute limit, one-pending-request races, restart persistence, linking (single-use codes, takeover protection, 30-day changes, history), access revocation when a member leaves, fail-closed Discord outages, admin permissions (non-admins, other guilds, forged confirmations), the guarantee that failed or unconfirmed deliveries are never reported as successful, secret redaction, and a real-protocol run against a fake 1.21.11 server. The `ci.yml` workflow runs all of this on every push.
 
@@ -388,7 +388,6 @@ These need your accounts or your hands in the game. Everything else has a defaul
 | `navigation.home` | auto | `{x, y, z, facing}` |
 | `navigation.allowDigging` / `allowPlacing` / `allowParkour` | `false` | Movement permissions |
 | `delivery.*` | `teleport` with `/tpa {player}` | Default delivery. Override per kit with `kits.<name>.delivery` |
-| `navigation.chestOpenAttempts` / `chestOpenTimeoutMs` | `8` / `4000` | Opening a kit chest: before each try the bot steps onto the centre of its spot and aims at the click point (side, side higher, top, in turn); when no window opens it looks away and tries again |
 | `navigation.returnCommands` / `farFromHomeBlocks` / `respawnWaitMs` | `["/kill"]` / `32` / `20000` | How the bot gets back to base when it is too far to walk |
 | `kits.<name>` | — | `direction`, `distance` or `standAt`, `timeoutMs`, `retrieval{method, container, items}` |
 | `logging.retentionDays` / `consoleLevel` | `30` / `INFO` | Event retention; console verbosity (`DEBUG` shows chat lines) |
