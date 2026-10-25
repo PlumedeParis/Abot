@@ -105,7 +105,17 @@ function fakeWorld({ stock = 1, pickup = 'target' } = {}) {
       if (pickup === 'thief') bot.emit('playerCollect', { id: 3, username: 'Thief' }, drop);
     }, 10);
   };
-  const fakePathfinder = { Movements: function Movements() {}, goals: { GoalNear: function (x, y, z, r) { Object.assign(this, { x, y, z, r }); } } };
+  const fakePathfinder = {
+    Movements: function Movements() {},
+    goals: {
+      GoalNear: function (x, y, z, r) {
+        Object.assign(this, { x, y, z, r });
+      },
+      GoalBlock: function (x, y, z) {
+        Object.assign(this, { x: x + 0.5, y, z: z + 0.5 });
+      }
+    }
+  };
   return { bot, inventory, chestItems, fakePathfinder };
 }
 
@@ -113,7 +123,7 @@ let lastLogger = null;
 let lastStock = [];
 async function runDelivery(world, settingsOverride = {}) {
   lastStock = [];
-  const s = testSettings(deepMerge({ delivery: { pickupTimeoutMs: 300, waitForPlayerMs: 300 }, navigation: { respawnWaitMs: 300 } }, settingsOverride));
+  const s = testSettings(deepMerge({ delivery: { pickupTimeoutMs: 300, waitForPlayerMs: 300 }, navigation: { respawnWaitMs: 300, chestOpenTimeoutMs: 200 } }, settingsOverride));
   world.commands = [];
   const db = await sqliteDb();
   const logger = fakeLogger();
@@ -302,7 +312,8 @@ test('if the server ignores the first click, the bot retries and still delivers'
   const { row } = await runDelivery(world);
   assert.equal(row.status, 'delivered');
   assert.equal(world.bot.openCalls.length, 2);
-  assert.deepEqual(world.bot.openCalls[1].direction, new Vec3(0, 1, 0), 'second try uses the top face');
+  assert.deepEqual(world.bot.openCalls[1].direction, world.bot.openCalls[0].direction, 'second try: same side');
+  assert.ok(world.bot.openCalls[1].cursor.y > world.bot.openCalls[0].cursor.y, 'second try: a bit higher on that side');
 });
 
 test('delivery report: "not confirmed" when the kit was thrown but not picked up', async () => {
@@ -406,4 +417,32 @@ test('a chest with a solid block on top (either half) is reported instead of cli
   assert.deepEqual(kits.chestBlockers(bot, chest), [], 'glass and slabs do not block');
   bot.entities = { 5: { name: 'cat', position: new Vec3(99.5, 64.9, 200.5) } };
   assert.deepEqual(kits.chestBlockers(bot, chest), ['a cat is sitting on the half the bot uses']);
+});
+
+test('the bot keeps trying like a player: looks away, steps back in front of the chest, clicks again', async () => {
+  const world = fakeWorld();
+  world.bot.ignoreClicks = 5; // the server ignores the first five clicks
+  const looks = [];
+  world.bot.look = async (yaw, pitch) => looks.push({ yaw, pitch });
+  const gotos = [];
+  const goto = world.bot.pathfinder.goto;
+  world.bot.pathfinder.goto = async (goal) => {
+    gotos.push(goal);
+    return goto(goal);
+  };
+  const { row } = await runDelivery(world);
+  assert.equal(row.status, 'delivered', 'opened on the 6th try');
+  assert.equal(world.bot.openCalls.length, 6);
+  assert.equal(looks.length, 5, 'looked away after each failed try');
+  assert.deepEqual(world.bot.openCalls.map((c) => c.direction.y), [0, 0, 1, 0, 0, 1], 'side, side higher, top, ...');
+  // Totem spot is (-3,64,0): the bot steps onto its centre before trying.
+  assert.ok(gotos.some((g) => g.x === -2.5 && g.z === 0.5));
+});
+
+test('after every try fails, the error says how many tries and why', async () => {
+  const world = fakeWorld();
+  world.bot.ignoreClicks = 99;
+  const { row } = await runDelivery(world, { navigation: { chestOpenAttempts: 3 } });
+  assert.equal(row.status, 'failed');
+  assert.match(row.error, /after 3 tries \(no chest window opened x3\)/);
 });

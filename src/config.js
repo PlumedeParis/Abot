@@ -94,6 +94,9 @@ const DEFAULTS = {
     allowSprinting: true,
     arriveRadius: 1,
     defaultTimeoutMs: 60000,
+    // Opening a kit chest: tries (looking away between tries) and the wait for the window on each.
+    chestOpenAttempts: 8,
+    chestOpenTimeoutMs: 4000,
     // Too far to walk home (e.g. after teleporting to a player): run these
     // commands, e.g. "/kill" to respawn at the bed next to the base.
     farFromHomeBlocks: 32,
@@ -229,6 +232,8 @@ function validateSettings(s, { allowPlaceholders = false } = {}) {
   positive('linking.codeTtlMinutes', s.linking.codeTtlMinutes);
   positive('linking.usernameChangeCooldownDays', s.linking.usernameChangeCooldownDays);
   positive('chat.maxLength', s.chat.maxLength);
+  positive('navigation.chestOpenAttempts', s.navigation.chestOpenAttempts);
+  positive('navigation.chestOpenTimeoutMs', s.navigation.chestOpenTimeoutMs);
   if (!Number.isInteger(s.stock.lowThreshold) || s.stock.lowThreshold < 0) errors.push('stock.lowThreshold: must be a whole number (0 or more)');
 
   if (!/^![a-z]+$/i.test(s.chat.kitCommand)) errors.push('chat.kitCommand: must look like "!kit"');
