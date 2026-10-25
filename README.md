@@ -99,7 +99,7 @@ Players then use `/link minecraft_username:<name>` in Discord, whisper `!link <c
 | `src/membership.js` | Live Discord membership check (REST) |
 | `src/discord.js` / `src/admin.js` | Slash commands, confirmations, admin actions, log channel |
 | `scripts/` | Config validator, syntax check, bounded supervisor for GitHub Actions |
-| `test/` | 151 automated tests (see [§8](#8-run-the-tests)) |
+| `test/` | 145 automated tests (see [§8](#8-run-the-tests)) |
 
 ---
 
@@ -133,7 +133,6 @@ The bot will not start the Minecraft side until you confirm the rules: tick the 
 | `!kit totem` / `!kit pvp` / `!kit grief` | Request a kit (case-insensitive) |
 | `!kit <anything else>` | "Unknown kit. Available kits: totem, pvp, grief." |
 | `!link ABCD-EFGH` | Finish linking (code from `/link` in Discord) |
-| `!ask <question>` | A free AI ([Pollinations](https://pollinations.ai), no key, no cost) answers in the public chat as `[AI] <player>: <answer>`. No cooldown; questions are answered one after another (up to 20 waiting). The free service can take several seconds or not answer; the player is then told by whisper. Banned players are refused |
 
 Normal chat is ignored. A message counts only if it **starts** with `!kit` / `!link`, the sender is visible in the player list, and it is not a repeat within 5 seconds.
 
@@ -271,7 +270,7 @@ Build the station in game: a spot where the bot stands ("home"), with the **tote
 npm ci
 npm run check                    # syntax check
 npm run validate-config:example  # example settings structure
-npm test                         # 151 tests, about 2–3 minutes
+npm test                         # 145 tests, about 2–3 minutes
 ```
 The tests cover cooldowns (shared across kits), the rolling quota, refunds, the global 2-per-minute limit, one-pending-request races, restart persistence, linking (single-use codes, takeover protection, 30-day changes, history), access revocation when a member leaves, fail-closed Discord outages, admin permissions (non-admins, other guilds, forged confirmations), the guarantee that failed or unconfirmed deliveries are never reported as successful, secret redaction, and a real-protocol run against a fake 1.21.11 server. The `ci.yml` workflow runs all of this on every push.
 
@@ -391,7 +390,6 @@ These need your accounts or your hands in the game. Everything else has a defaul
 | `delivery.*` | `teleport` with `/tpa {player}` | Default delivery. Override per kit with `kits.<name>.delivery` |
 | `navigation.returnCommands` / `farFromHomeBlocks` / `respawnWaitMs` | `["/kill"]` / `32` / `20000` | How the bot gets back to base when it is too far to walk |
 | `kits.<name>` | — | `direction`, `distance` or `standAt`, `timeoutMs`, `retrieval{method, container, items}` |
-| `ask.*` | `!ask`, Pollinations `https://text.pollinations.ai/` model `openai`, 45 s timeout, no cooldown, 20 waiting max, 200 chars, `requireLink: false`, `[AI] {player}: {answer}` | The `!ask` command; `url: ""` turns it off, `cooldownSeconds` adds a per-player limit |
 | `logging.retentionDays` / `consoleLevel` | `30` / `INFO` | Event retention; console verbosity (`DEBUG` shows chat lines) |
 
 `/kitbot reload` re-reads these settings (from `config.json` or `KITBOT_CONFIG_JSON`), validates them, and applies them to both bots. Invalid settings are rejected and the old ones stay. Secrets are read only at startup and are never shown.

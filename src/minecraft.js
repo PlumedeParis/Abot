@@ -14,7 +14,6 @@ const { createQueue, recoverInterrupted } = require('./queue');
 const { createKitService, numberBlockInteractions } = require('./kits');
 const linking = require('./linking');
 const { recordStock } = require('./stock');
-const { createAsker } = require('./ask');
 const { detectStation, applyStation, describeStation } = require('./station');
 
 const MC_MAX_CHAT = 256;
@@ -145,10 +144,7 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
     notify: (req, msg) => (getOnlinePlayer(req.mc_username) ? reply(req.mc_username, msg) : Promise.resolve())
   });
 
-  const asker = createAsker({ url: settings.ask.url, model: settings.ask.model, timeoutMs: settings.ask.timeoutSeconds * 1000, logger });
   const handleChat = createRequestHandler({
-    ask: asker,
-    sayPublic: (text) => sendRaw(sanitizeOutgoing(text, MC_MAX_CHAT)).catch(() => {}),
     db,
     getSettings,
     getRuntime: () => runtime,

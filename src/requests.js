@@ -41,15 +41,9 @@ function parseSignedChat(line, username) {
 }
 
 // Returns null when the message is not a bot command (normal chat is ignored).
-// ask: settings.ask (optional) - "!ask <question>" keeps the question text.
-function parseCommand(message, chat, ask = null) {
+function parseCommand(message, chat) {
   if (typeof message !== 'string') return null;
   const text = message.trim();
-  if (ask && ask.command) {
-    const cmd = ask.command.toLowerCase();
-    const lower = text.toLowerCase();
-    if (lower === cmd || lower.startsWith(`${cmd} `)) return { type: 'ask', question: text.slice(cmd.length).trim() };
-  }
   if (text.length > 64) return null;
   const parts = text.split(/\s+/);
   const head = parts[0].toLowerCase();
@@ -83,13 +77,7 @@ const LINK_ERRORS = {
   link_changed: 'Your link changed while this code was pending. Run /link again in Discord.'
 };
 
-// ask(question, player) -> { ok, answer } | { ok: false, reason } (null when no
-// AI key is configured); sayPublic(text) writes in the public chat.
-function createRequestHandler({ db, getSettings, getRuntime, logger, checkMembership, getOnlinePlayer, reply, ask = null, sayPublic = async () => {}, onQueued = () => {}, now = () => Date.now() }) {
-  const lastAskAt = new Map();
-  // Questions are answered one after another, in order (the free AI takes one at a time).
-  let askChain = Promise.resolve();
-  let askWaiting = 0;
+function createRequestHandler({ db, getSettings, getRuntime, logger, checkMembership, getOnlinePlayer, reply, onQueued = () => {}, now = () => Date.now() }) {
   const lastCommandAt = new Map();
   const recent = new Map();
 
@@ -200,64 +188,9 @@ function createRequestHandler({ db, getSettings, getRuntime, logger, checkMember
     return res;
   }
 
-  async function handleAsk(username, question, s) {
-    const cfg = s.ask;
-    const wait = (ms) => `${Math.ceil(ms / 1000)}s`;
-    if (!ask) {
-      await reply(username, `${cfg.command} is not available right now.`);
-      return { ok: false, reason: 'disabled' };
-    }
-    if (!question) {
-      await reply(username, `Usage: ${cfg.command} <your question>`);
-      return { ok: false, reason: 'usage' };
-    }
-    if (question.length > cfg.maxQuestionLength) {
-      await reply(username, `Your question is too long (${cfg.maxQuestionLength} characters max).`);
-      return { ok: false, reason: 'too_long' };
-    }
-    const link = await linking.getActiveLinkByUsername(db, username);
-    if (await bans.findBan(db, { mcUsername: username, discordId: link ? link.discord_id : null })) {
-      await reply(username, 'You are banned from the kit bot.');
-      return { ok: false, reason: 'banned' };
-    }
-    if (cfg.requireLink && !link) {
-      await reply(username, `Link your account first to use ${cfg.command}: run /link in our Discord.`);
-      return { ok: false, reason: 'not_linked' };
-    }
-    const t = now();
-    const mine = lastAskAt.get(username.toLowerCase()) || 0;
-    if (cfg.cooldownSeconds > 0 && t - mine < cfg.cooldownSeconds * 1000) {
-      await reply(username, `Wait ${wait(cfg.cooldownSeconds * 1000 - (t - mine))} before asking again.`);
-      return { ok: false, reason: 'cooldown' };
-    }
-    if (askWaiting >= cfg.maxQueued) {
-      await reply(username, 'Too many questions are waiting, try again in a minute.');
-      return { ok: false, reason: 'queue_full' };
-    }
-    lastAskAt.set(username.toLowerCase(), t);
-    askWaiting++;
-    const run = askChain.then(async () => {
-      try {
-        const r = await ask(question, username);
-        if (!r.ok) {
-          const why = { refused: "Sorry, I can't answer that.", empty: "Sorry, I can't answer that.", busy: 'The AI is busy, try again in a minute.' };
-          await reply(username, why[r.reason] || 'The AI did not answer, try again later.');
-          return r;
-        }
-        await sayPublic(cfg.replyFormat.replace(/\{player\}/g, username).replace(/\{answer\}/g, r.answer));
-        await logger.info('ask.answered', `${username} asked "${question}" -> "${r.answer}"`);
-        return r;
-      } finally {
-        askWaiting--;
-      }
-    });
-    askChain = run.catch(() => {});
-    return run;
-  }
-
   return async function handle(username, message) {
     const s = getSettings();
-    const cmd = parseCommand(message, s.chat, s.ask);
+    const cmd = parseCommand(message, s.chat);
     if (!cmd) return null; // normal chat: ignore
     if (!/^[A-Za-z0-9_]{1,16}$/.test(username)) return null;
     const player = getOnlinePlayer(username);
@@ -279,8 +212,6 @@ function createRequestHandler({ db, getSettings, getRuntime, logger, checkMember
         return { ok: false, reason: 'usage' };
       case 'link':
         return handleLink(username, cmd.code, player, s);
-      case 'ask':
-        return handleAsk(username, cmd.question, s);
       default:
         return null;
     }
