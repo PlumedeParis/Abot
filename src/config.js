@@ -114,6 +114,20 @@ const DEFAULTS = {
     pickupTimeoutMs: 15000,
     returnUndelivered: true
   },
+  // "!ask <question>": answered in the public chat by Pollinations, a free
+  // text AI that needs no key. url "" turns the command off.
+  ask: {
+    command: '!ask',
+    url: 'https://text.pollinations.ai/',
+    model: 'openai',
+    timeoutSeconds: 45,
+    // 0 = no limit. Questions are answered one after another in order.
+    cooldownSeconds: 0,
+    maxQueued: 20,
+    maxQuestionLength: 200,
+    requireLink: false,
+    replyFormat: '[AI] {player}: {answer}'
+  },
   stock: {
     // Alert in the log channel when a kit chest has this many kits or fewer.
     lowThreshold: 5
@@ -229,6 +243,13 @@ function validateSettings(s, { allowPlaceholders = false } = {}) {
   positive('linking.codeTtlMinutes', s.linking.codeTtlMinutes);
   positive('linking.usernameChangeCooldownDays', s.linking.usernameChangeCooldownDays);
   positive('chat.maxLength', s.chat.maxLength);
+  if (!/^![a-z]+$/i.test(s.ask.command)) errors.push('ask.command: must look like "!ask"');
+  if (!s.ask.replyFormat.includes('{answer}')) errors.push('ask.replyFormat: must contain {answer}');
+  positive('ask.maxQuestionLength', s.ask.maxQuestionLength);
+  positive('ask.timeoutSeconds', s.ask.timeoutSeconds);
+  positive('ask.maxQueued', s.ask.maxQueued);
+  if (!isNum(s.ask.cooldownSeconds) || s.ask.cooldownSeconds < 0) errors.push('ask.cooldownSeconds: must be 0 (no limit) or more');
+  if (s.ask.url && !/^https:\/\//.test(s.ask.url)) errors.push('ask.url: must be an https:// address, or "" to turn !ask off');
   if (!Number.isInteger(s.stock.lowThreshold) || s.stock.lowThreshold < 0) errors.push('stock.lowThreshold: must be a whole number (0 or more)');
 
   if (!/^![a-z]+$/i.test(s.chat.kitCommand)) errors.push('chat.kitCommand: must look like "!kit"');

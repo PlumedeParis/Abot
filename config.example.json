@@ -92,6 +92,17 @@
     "pickupTimeoutMs": 15000,
     "returnUndelivered": true
   },
+  "ask": {
+    "command": "!ask",
+    "url": "https://text.pollinations.ai/",
+    "model": "openai",
+    "timeoutSeconds": 45,
+    "cooldownSeconds": 0,
+    "maxQueued": 20,
+    "maxQuestionLength": 200,
+    "requireLink": false,
+    "replyFormat": "[AI] {player}: {answer}"
+  },
   "stock": {
     "lowThreshold": 5
   },
