@@ -54,6 +54,13 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
   let lastReloadAt = null;
   let chatPatterns = compilePatterns(settings.chat.patterns);
   const chatLineListeners = new Set();
+  let lastChatAt = 0;
+  let lastUnreadableAt = 0;
+  let chatSilenceWarned = false;
+  const mentionsCommand = (line) => {
+    const lower = line.toLowerCase();
+    return lower.includes(settings.chat.kitCommand.toLowerCase()) || lower.includes(settings.chat.linkCommand.toLowerCase());
+  };
   const intervals = [];
 
   // ---- outgoing chat (throttled to avoid server anti-spam kicks) ----------
@@ -263,6 +270,8 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
         await new Promise((r) => setTimeout(r, settings.auth.postLoginDelayMs));
         for (const cmd of settings.auth.postLoginCommands) await sendCommand(cmd);
         runtime.minecraftReady = true;
+        lastChatAt = Date.now();
+        chatSilenceWarned = false;
         await ensureStation();
         const free = current.inventory.emptySlotCount();
         if (free < 2) {
@@ -279,6 +288,7 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
 
     current.on('messagestr', (line, position, msg, sender) => {
       if (position === 'game_info') return; // action bar
+      lastChatAt = Date.now();
       logger.debug('chat.line', line); // console only, with logging.consoleLevel = "DEBUG"
       for (const fn of [...chatLineListeners]) {
         try {
@@ -292,13 +302,32 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
       // whatever the server's chat format looks like.
       const signer = position === 'chat' && sender ? Object.values(current.players).find((p) => p.uuid === sender) : null;
       const parsed = (signer && parseSignedChat(line, signer.username)) || parseChatLine(line, chatPatterns);
-      if (!parsed || parsed.username === current.username) return;
+      if (!parsed) {
+        // A command we could not attribute to a player: show the raw line so the chat patterns can be fixed.
+        if (mentionsCommand(line) && Date.now() - lastUnreadableAt > 30000) {
+          lastUnreadableAt = Date.now();
+          logger.warn('chat.unreadable', `Saw a command in the chat but could not tell who sent it (chat type: ${position}). Line: "${line.slice(0, 200)}"`);
+        }
+        return;
+      }
+      if (parsed.username === current.username) return;
       handleChat(parsed.username, parsed.message).catch((e) => logger.error('request.error', `Error handling a command from ${parsed.username}: ${e.message}`));
     });
 
     current.on('death', () => {
       if (kitService.isReturning()) logger.debug('minecraft.death', 'Respawning to return to base.');
       else logger.warn('minecraft.death', 'The bot died.');
+      // Mineflayer respawns by itself; make sure it did, or the bot stays on the death screen.
+      setTimeout(() => {
+        if (bot === current && !current.isAlive) {
+          logger.warn('minecraft.death', 'The bot is still dead after 5s; asking the server to respawn it.');
+          try {
+            current.respawn();
+          } catch {
+            // disconnected
+          }
+        }
+      }, 5000);
     });
 
     current.on('kicked', (reason) => {
@@ -450,6 +479,15 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
   }
 
   async function heartbeat() {
+    // No chat at all for 5 minutes: the server is not sending the chat to the bot
+    // (e.g. still in a lobby or queue), so it cannot see any command.
+    if (runtime.minecraftReady && !chatSilenceWarned && Date.now() - lastChatAt > 5 * 60000) {
+      chatSilenceWarned = true;
+      await logger.warn('chat.silent', 'The bot has not received any chat message for 5 minutes, so it cannot see !kit. Check in game that it is really on the server (not in a lobby or queue) and that the chat is visible to it.');
+    } else if (chatSilenceWarned && Date.now() - lastChatAt < 60000) {
+      chatSilenceWarned = false;
+      await logger.info('chat.silent', 'The bot receives the chat again.');
+    }
     const cur = queue.current();
     await setStatus(db, 'minecraft', {
       connected: runtime.connected,

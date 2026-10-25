@@ -109,6 +109,13 @@ test('real protocol: /reg on first join, /log afterwards, chat commands and link
   assert.ok(!srv.commands.some((c) => c.startsWith('msg Mallory')));
   assert.ok(srv.commands.every((c) => !c.includes('undefined')));
 
+  // A command in a chat format the patterns do not know is reported with the raw line.
+  srv.say('* Alice says !kit totem');
+  assert.ok(await waitFor(() => logger.events.some((e) => e.type === 'chat.unreadable' && e.message.includes('* Alice says !kit totem'))));
+  // A command from a name that is not in the tab list is ignored, and the log says why.
+  srv.say('<Ghost> !kit totem');
+  assert.ok(await waitFor(() => logger.events.some((e) => e.type === 'request.ignored' && e.message.includes('Ghost'))));
+
   // An admin message queued from Discord (/kitbot say) appears in the public chat.
   const { createAdminActions } = require('../src/admin');
   const actions = createAdminActions({ db, logger, getSettings: () => settings });

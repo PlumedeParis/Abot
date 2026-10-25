@@ -194,8 +194,15 @@ function createRequestHandler({ db, getSettings, getRuntime, logger, checkMember
     if (!cmd) return null; // normal chat: ignore
     if (!/^[A-Za-z0-9_]{1,16}$/.test(username)) return null;
     const player = getOnlinePlayer(username);
-    if (s.chat.requireOnlinePlayer && !player) return null; // not a real online player: possible spoof
-    if (isDuplicateOrSpam(username, message, s)) return null;
+    if (s.chat.requireOnlinePlayer && !player) {
+      // not a real online player: possible spoof
+      await logger.warn('request.ignored', `Ignored "${message.slice(0, 40)}" from ${username}: no player with that exact name is in the tab list.`);
+      return null;
+    }
+    if (isDuplicateOrSpam(username, message, s)) {
+      await logger.debug('request.ignored', `Ignored "${message.slice(0, 40)}" from ${username}: sent again too quickly (wait ${Math.ceil(s.chat.perPlayerCommandIntervalMs / 1000)}s between commands).`);
+      return null;
+    }
 
     switch (cmd.type) {
       case 'kit_usage':
