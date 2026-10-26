@@ -14,6 +14,9 @@ const { DeliveryError } = require('./queue');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Chest opening timings in ms (tests shorten them).
+const OPEN_TIMINGS = { settleMs: 300, aimMs: 250, waitMs: 4000, betweenMs: 500, lastWaitMs: 10000 };
+
 function itemMatches(item, spec) {
   if (!item) return false;
   return spec.name ? item.name === spec.name : new RegExp(spec.nameRegex).test(item.name);
@@ -115,55 +118,103 @@ function createDelivery({ getBot, getSettings, getStation, logger, sendCommand, 
     checkAbort(signal);
   }
 
-  // Opens the container like a player: look at the exact point of the face
-  // turned towards the bot, let the server get that rotation, click that point.
-  async function openContainer(pos, signal) {
+  // Opens the container like a player, in this order:
+  //   1. up to 5 clicks on the chest (the face turned towards the bot, then
+  //      its top, alternately);
+  //   2. twice: turn the camera away, click in the air, look back at the chest
+  //      and click it again;
+  //   3. wait 10 seconds, then click one last time.
+  // Each click looks at the exact point it clicks and lets the server get that
+  // rotation first (anti-cheats drop clicks that do not match the look). A
+  // window that opens late, on a laggy server, is still used: earlier clicks
+  // keep waiting for it, and a window is never closed between attempts.
+  async function openContainer(pos, signal, what = 'the kit chest') {
     const b = bot();
     const block = b.blockAt(new Vec3(pos.x, pos.y, pos.z));
-    if (!block) throw new DeliveryError('the kit chest is not loaded');
+    if (!block) throw new DeliveryError(`${what} is not loaded`);
     if (!/chest|barrel|shulker_box/.test(block.name)) throw new DeliveryError(`there is no chest at the kit spot any more (found ${block.name})`);
-    if (b.entity.position.distanceTo(block.position.offset(0.5, 0.5, 0.5)) > 4.5) throw new DeliveryError('the kit chest is out of reach');
+    if (b.entity.position.distanceTo(block.position.offset(0.5, 0.5, 0.5)) > 4.5) throw new DeliveryError(`${what} is out of reach`);
     const blocked = blockedChest(b, block);
-    if (blocked) throw new DeliveryError(`the kit chest cannot open: ${blocked}. Remove it`);
+    if (blocked) throw new DeliveryError(`${what} cannot open: ${blocked}. Remove it`);
 
-    const tries = [clickFace(b, block), { face: new Vec3(0, 1, 0), cursor: new Vec3(0.5, 0.875, 0.5) }, clickFace(b, block)];
+    const t = OPEN_TIMINGS;
+    const top = { face: new Vec3(0, 1, 0), cursor: new Vec3(0.5, 0.875, 0.5) };
+    const openings = []; // every click waits for the window; failures never settle
+    const opened = () => Promise.race(openings);
     const errors = [];
     const said = [];
     const off = onChatLine((line) => said.push(line));
-    try {
-      for (const { face, cursor } of tries) {
-        checkAbort(signal);
+    let clicks = 0;
+
+    async function click(aim) {
+      checkAbort(signal);
+      clicks++;
+      try {
+        await b.lookAt(block.position.offset(aim.cursor.x, aim.cursor.y, aim.cursor.z), true);
+        await sleep(t.aimMs);
+        // openContainer() would aim at the block centre again: keep our aim.
+        const lookAt = b.lookAt;
+        b.lookAt = async () => {};
         try {
-          if (b.currentWindow) b.closeWindow(b.currentWindow);
-          await b.lookAt(block.position.offset(cursor.x, cursor.y, cursor.z), true);
-          await sleep(150);
-          // openContainer() would aim at the block centre again: keep our aim.
-          const lookAt = b.lookAt;
-          b.lookAt = async () => {};
-          let opening;
-          try {
-            opening = b.openContainer(block, face, cursor);
-          } finally {
-            b.lookAt = lookAt;
-          }
-          return await withTimeout(opening, 5000, 'no chest window opened');
-        } catch (e) {
-          errors.push(e.message);
-          await sleep(500);
+          openings.push(b.openContainer(block, aim.face, aim.cursor).catch(() => new Promise(() => {})));
+        } finally {
+          b.lookAt = lookAt;
         }
+        return await withTimeout(opened(), t.waitMs, 'no chest window opened');
+      } catch (e) {
+        if (e.retryable) throw e;
+        errors.push(`click ${clicks}: ${e.message}`);
+        return null;
+      }
+    }
+
+    async function lookAwayAndClickAir() {
+      checkAbort(signal);
+      const { yaw, pitch } = b.entity;
+      await b.look(yaw + Math.PI * (0.5 + Math.random() * 0.5) * (Math.random() < 0.5 ? -1 : 1), pitch, true).catch(() => {});
+      await sleep(t.aimMs);
+      b.swingArm(); // a click in the air
+      await sleep(t.aimMs);
+    }
+
+    try {
+      try {
+        if (b.currentWindow) b.closeWindow(b.currentWindow);
+      } catch {
+        // already closed
+      }
+      b.clearControlStates();
+      await sleep(t.settleMs); // stand still before clicking
+      let win = null;
+      for (let i = 0; i < 5 && !win; i++) {
+        win = await click(i % 2 === 0 ? clickFace(b, block) : top);
+        if (!win) await sleep(t.betweenMs);
+      }
+      for (let i = 0; i < 2 && !win; i++) {
+        await lookAwayAndClickAir();
+        win = await click(clickFace(b, block));
+      }
+      if (!win) {
+        checkAbort(signal);
+        win = await withTimeout(opened(), t.lastWaitMs, 'still no window').catch(() => null); // a late window counts
+        if (!win) win = await click(clickFace(b, block));
+      }
+      if (win) {
+        if (clicks > 1) await logger.info('chest.opened', `Opened ${what} after ${clicks} clicks.`);
+        return win;
       }
     } finally {
       off();
     }
     const server = said.slice(-3).map((l) => `"${l.slice(0, 120)}"`).join(', ');
-    throw new DeliveryError(`could not open the kit chest (${errors.join('; ')})${server ? `; the server said: ${server}` : ''}`);
+    throw new DeliveryError(`could not open ${what} after ${clicks} clicks (${errors.slice(-3).join('; ')})${server ? `; the server said: ${server}` : '; the server said nothing'}`);
   }
 
   async function takeKit(kitName, place, specs, signal) {
     const b = bot();
     if (!missingItems(b.inventory.items(), specs).length) return; // left over from an interrupted delivery
     if (b.inventory.emptySlotCount() < specs.length) throw new DeliveryError('the bot inventory is full; empty it');
-    const chest = await openContainer(place.container, signal);
+    const chest = await openContainer(place.container, signal, `the ${kitName} chest`);
     try {
       for (const { spec, missing } of missingItems(b.inventory.items(), specs)) {
         const stacks = chest.containerItems().filter((it) => itemMatches(it, spec));
@@ -197,7 +248,7 @@ function createDelivery({ getBot, getSettings, getStation, logger, sendCommand, 
     const held = b.inventory.items().filter((it) => specs.some((spec) => itemMatches(it, spec)));
     if (!held.length) return;
     await goTo(place.standAt, `the ${kitName} chest`, signal);
-    const chest = await openContainer(place.container, signal);
+    const chest = await openContainer(place.container, signal, `the ${kitName} chest`);
     try {
       for (const it of held) await chest.deposit(it.type, null, it.count, it.nbt || null);
     } finally {
@@ -355,4 +406,4 @@ function createDelivery({ getBot, getSettings, getStation, logger, sendCommand, 
   return { deliver, goHome, isReturning: () => returning };
 }
 
-module.exports = { itemMatches, countMatching, missingItems, clickFace, numberBlockInteractions, createDelivery };
+module.exports = { OPEN_TIMINGS, itemMatches, countMatching, missingItems, clickFace, numberBlockInteractions, createDelivery };

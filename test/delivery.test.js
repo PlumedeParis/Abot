@@ -6,7 +6,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const { Vec3 } = require('vec3');
-const { createDelivery } = require('../src/delivery');
+const { createDelivery, OPEN_TIMINGS } = require('../src/delivery');
+
+// Short chest-opening timings for the tests.
+Object.assign(OPEN_TIMINGS, { settleMs: 1, aimMs: 1, waitMs: 60, betweenMs: 1, lastWaitMs: 100 });
 const { DeliveryError } = require('../src/queue');
 const { settings, fakeLogger } = require('./helpers');
 
@@ -17,7 +20,9 @@ const station = {
 };
 
 // options: chest (items in the pvp chest), accept (player accepts /tpa), picker (who picks up)
-function fakeWorld({ chest = 3, accept = true, picker = 'Steve' } = {}) {
+// failClicks: clicks on the chest that open no window; lateClick: that click's
+// window only opens after its wait ran out (a laggy server).
+function fakeWorld({ chest = 3, accept = true, picker = 'Steve', failClicks = 0, lateClick = 0 } = {}) {
   const bot = new EventEmitter();
   const commands = [];
   let inventory = [];
@@ -29,7 +34,10 @@ function fakeWorld({ chest = 3, accept = true, picker = 'Steve' } = {}) {
   bot.players = { Steve: steve, VoidKits: { username: 'VoidKits', entity: bot.entity } };
   bot.inventory = { items: () => inventory, emptySlotCount: () => 36 - inventory.length };
   bot.blockAt = (p) => (p.x === 3 && p.y === 64 && p.z === 0 ? { name: 'chest', position: new Vec3(3, 64, 0) } : { name: 'air', position: p, transparent: true, shapes: [] });
+  const actions = [];
   bot.lookAt = async () => {};
+  bot.look = async () => void actions.push('look away');
+  bot.swingArm = () => void actions.push('click air');
   bot.clearControlStates = () => {};
   bot.closeWindow = () => {};
   bot.pathfinder = {
@@ -38,7 +46,18 @@ function fakeWorld({ chest = 3, accept = true, picker = 'Steve' } = {}) {
     goto: async (goal) => void (bot.entity.position = new Vec3(goal.x + 0.5, goal.y, goal.z + 0.5))
   };
   const shulker = () => ({ name: 'red_shulker_box', type: 7, count: 1 });
-  bot.openContainer = async () => ({
+  let clicks = 0;
+  bot.openContainer = async () => {
+    clicks++;
+    actions.push('click chest');
+    if (clicks === lateClick) {
+      await new Promise((r) => setTimeout(r, 120));
+      return container();
+    }
+    if (clicks <= failClicks) return new Promise(() => {}); // no window ever opens
+    return container();
+  };
+  const container = () => ({
     containerItems: () => Array.from({ length: stock }, shulker),
     withdraw: async () => {
       stock--;
@@ -61,7 +80,7 @@ function fakeWorld({ chest = 3, accept = true, picker = 'Steve' } = {}) {
     if (cmd === '/tpa Steve' && accept) bot.entity.position = steve.entity.position.offset(1, 0, 0); // the bot appears next to Steve
     if (cmd === '/kill') bot.entity.position = new Vec3(1.5, 64, 0.5); // respawn at the base bed
   };
-  return { bot, commands, sendCommand, stock: () => stock, inventory: () => inventory };
+  return { bot, commands, actions, sendCommand, stock: () => stock, inventory: () => inventory };
 }
 
 // Stand-in for mineflayer-pathfinder (the simulated bot walks instantly).
@@ -141,4 +160,36 @@ test('a lost connection stops the delivery and can be retried', async () => {
   const ac = new AbortController();
   ac.abort();
   await assert.rejects(t.d.deliver(req, t.ctx, ac.signal), (e) => e.retryable === true);
+});
+
+test('chest opening: 5 clicks, then twice look away + click in the air + retry, then wait and a last click', async () => {
+  for (const [failClicks, expected] of [
+    [0, ['click chest']],
+    [3, Array(4).fill('click chest')],
+    [5, [...Array(5).fill('click chest'), 'look away', 'click air', 'click chest']],
+    [7, [...Array(5).fill('click chest'), 'look away', 'click air', 'click chest', 'look away', 'click air', 'click chest', 'click chest']]
+  ]) {
+    const w = fakeWorld({ failClicks });
+    const t = service(w);
+    await t.d.deliver(req, t.ctx, null);
+    assert.deepEqual(w.actions, expected, `${failClicks} failed clicks`);
+    if (failClicks) assert.ok(t.logger.events.some((e) => e.type === 'chest.opened' && e.message.includes(`after ${failClicks + 1} clicks`)));
+  }
+});
+
+test('chest opening: gives up after 8 clicks and says so', async () => {
+  const w = fakeWorld({ failClicks: 99 });
+  const t = service(w);
+  await assert.rejects(t.d.deliver(req, t.ctx, null), /could not open the pvp chest after 8 clicks/);
+  assert.equal(w.actions.filter((a) => a === 'click chest').length, 8);
+  assert.equal(w.actions.filter((a) => a === 'click air').length, 2);
+});
+
+test('chest opening: a window that opens late is used, not closed', async () => {
+  // Only the first click opens a window, after its wait ran out.
+  const w = fakeWorld({ failClicks: 99, lateClick: 1 });
+  const t = service(w);
+  await t.d.deliver(req, t.ctx, null);
+  assert.equal(w.stock(), 2, 'the kit was taken from the late window');
+  assert.ok(w.actions.filter((a) => a === 'click chest').length <= 3);
 });

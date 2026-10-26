@@ -101,7 +101,7 @@ Environment variables (GitHub secrets): `DISCORD_TOKEN` (required), `MINECRAFT_H
 | `No chat message at all for 15 minutes` | The bot is not in the world (lobby, queue, or death screen). |
 | `Kit chests not found (pvp)` | Fix that chest (side, distance, height) and run `/kitbot recalibrate`. |
 | `cannot walk back` / `still ... blocks from home after /kill` | The bot's bed is missing or too far: sleep in a bed next to the base as VoidKits. |
-| `could not open the kit chest ... the server said: ...` | A protection or anti-cheat plugin blocked the click. The server's message is included. |
+| `could not open the pvp chest after 8 clicks ... the server said: ...` | The bot clicks 5 times, then twice turns away, clicks in the air and clicks the chest again, then waits 10 seconds and clicks a last time. If all fail, a protection or anti-cheat plugin is probably blocking the click: the server's message is included. `Opened the pvp chest after N clicks` only means it needed several tries. |
 | `Login failed: the server refused the password` | Wrong `MINECRAFT_PASSWORD` for this account. |
 
 ## Running elsewhere
