@@ -1,4 +1,4 @@
-name: Run KitBot
+name: Run VoidKits
 
 # Runs the bot, started by hand from the Actions tab. A GitHub-hosted job
 # stops after at most 6 hours, so one run lasts at most 340 minutes. When you
@@ -7,7 +7,7 @@ name: Run KitBot
 # Cancelling a run stops the chain. For real 24/7 hosting see the README.
 #
 # Only one secret is required: DISCORD_TOKEN. Everything else has a default:
-#   - Minecraft: 1b1t.cc, account VoidClanKitBot (override with secrets
+#   - Minecraft: 1b1t.cc, account VoidKits (override with secrets
 #     MINECRAFT_HOST / MINECRAFT_USERNAME / MINECRAFT_PASSWORD ...)
 #   - Discord server, #kitbot-logs channel and admin (server owner) are found
 #     or created automatically (override with DISCORD_GUILD_ID / ...)
@@ -58,7 +58,7 @@ jobs:
     env:
       MINECRAFT_HOST: ${{ secrets.MINECRAFT_HOST || '1b1t.cc' }}
       MINECRAFT_PORT: ${{ secrets.MINECRAFT_PORT || '25565' }}
-      MINECRAFT_USERNAME: ${{ secrets.MINECRAFT_USERNAME || 'VoidClanKitBot' }}
+      MINECRAFT_USERNAME: ${{ secrets.MINECRAFT_USERNAME || 'VoidKits' }}
       MINECRAFT_AUTH: ${{ secrets.MINECRAFT_AUTH || 'offline' }}
       # The account owner chose to keep this password in the workflow; a
       # MINECRAFT_PASSWORD secret replaces it.

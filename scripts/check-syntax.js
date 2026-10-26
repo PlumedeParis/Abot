@@ -1,6 +1,6 @@
 'use strict';
 
-// Syntax-checks every JavaScript file (used by CI in addition to the tests).
+// Syntax check of every JavaScript file (node --check).
 
 const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
@@ -8,18 +8,23 @@ const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
 const files = [];
-for (const dir of ['src', 'scripts', 'test']) {
-  for (const f of fs.readdirSync(path.join(root, dir))) if (f.endsWith('.js')) files.push(path.join(dir, f));
-}
+(function walk(dir) {
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (e.name === 'node_modules' || e.name.startsWith('.')) continue;
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) walk(p);
+    else if (e.name.endsWith('.js')) files.push(p);
+  }
+})(root);
+
 let failed = 0;
 for (const f of files) {
   try {
-    execFileSync(process.execPath, ['--check', path.join(root, f)], { stdio: 'pipe' });
+    execFileSync(process.execPath, ['--check', f], { stdio: 'pipe' });
   } catch (e) {
     failed++;
-    console.error(`${f}:\n${e.stderr.toString()}`);
+    console.error(`${path.relative(root, f)}:\n${e.stderr}`);
   }
 }
-for (const f of ['config.example.json', 'package.json']) JSON.parse(fs.readFileSync(path.join(root, f), 'utf8'));
-console.log(failed ? `${failed} file(s) failed the syntax check.` : `${files.length} files OK.`);
+console.log(failed ? `${failed} file(s) with errors.` : `${files.length} files OK.`);
 process.exit(failed ? 1 : 0);

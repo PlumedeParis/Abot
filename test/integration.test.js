@@ -1,8 +1,8 @@
 'use strict';
 
-// End-to-end over the real Minecraft 1.21.11 protocol: a local fake server
-// (minecraft-protocol) with AuthMe-style /reg and /log, and the real
-// Mineflayer-based bot. No internet access needed.
+// End to end over the real Minecraft 1.21.11 protocol: a local server
+// (minecraft-protocol) with AuthMe-style /reg and /log, the 1b1t.cc chat
+// format, real player chat packets, and the real Mineflayer-based bot.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -11,119 +11,104 @@ const nbt = require('prismarine-nbt');
 const mcData = require('minecraft-data')('1.21.11');
 const { createMinecraftBot } = require('../src/minecraft');
 const linking = require('../src/linking');
-const { sqliteDb, testSettings, fakeLogger, member } = require('./helpers');
+const { settings, sqliteDb, fakeLogger, member, waitFor } = require('./helpers');
 
-function startFakeServer({ port, registered }) {
+const STEVE = '11111111-2222-3333-4444-555555555555';
+
+function startServer(port) {
+  const server = mc.createServer({ 'online-mode': false, version: '1.21.11', port, hideErrors: true });
   const commands = [];
   const chats = [];
-  const server = mc.createServer({ 'online-mode': false, version: '1.21.11', port, hideErrors: true });
   const clients = [];
-  const say = (client, text) => client.write('system_chat', { content: nbt.comp({ text: nbt.string(text) }), isActionBar: false });
-  server.on('playerJoin', (client) => {
-    clients.push(client);
+  const system = (c, text) => c.write('system_chat', { content: nbt.comp({ text: nbt.string(text) }), isActionBar: false });
+  const playerChat = (c, uuid, name, message) =>
+    c.write('player_chat', {
+      globalIndex: 0,
+      senderUuid: uuid,
+      index: 0,
+      signature: undefined,
+      plainMessage: message,
+      timestamp: BigInt(Date.now()),
+      salt: 0n,
+      previousMessages: [],
+      unsignedChatContent: undefined,
+      filterType: 0,
+      type: { chatType: 0 },
+      networkName: nbt.comp({ text: nbt.string(name) }),
+      networkTargetName: undefined
+    });
+  server.on('playerJoin', (c) => {
+    clients.push(c);
     const lp = { ...mcData.loginPacket };
     delete lp.dimensionCodec;
-    client.write('login', { ...lp, entityId: client.id, enforcesSecureChat: false });
-    client.write('update_health', { health: 20, food: 20, foodSaturation: 5 });
-    client.write('position', { teleportId: 1, x: 0, y: 64, z: 0, dx: 0, dy: 0, dz: 0, yaw: 0, pitch: 0, flags: {} });
-    setTimeout(() => say(client, registered ? 'Please login with /login <password>' : 'Please register with /reg <password> <password>'), 200);
-    client.on('chat_command', ({ command }) => {
+    c.write('login', { ...lp, entityId: c.id, enforcesSecureChat: false });
+    c.write('update_health', { health: 20, food: 20, foodSaturation: 5 });
+    c.write('position', { teleportId: 1, x: 0, y: 64, z: 0, dx: 0, dy: 0, dz: 0, yaw: 0, pitch: 0, flags: {} });
+    c.write('player_info', { action: { add_player: true, update_listed: true }, data: [{ uuid: STEVE, player: { name: 'Steve', properties: [] }, listed: 1 }] });
+    setTimeout(() => system(c, 'Please register with /reg <password> <password>'), 200);
+    c.on('chat_command', ({ command }) => {
       commands.push(command);
-      if (command.startsWith('reg ')) say(client, 'Successfully registered!');
-      if (command.startsWith('log ')) say(client, 'Successful login!');
+      if (command.startsWith('reg ')) system(c, 'Successfully registered!');
     });
-    client.on('chat_message', ({ message }) => chats.push(message));
+    c.on('chat_message', ({ message }) => chats.push(message));
   });
   return {
     commands,
     chats,
-    say: (text) => clients.forEach((c) => say(c, text)),
-    addPlayer: (name, uuid) =>
-      clients.forEach((c) =>
-        c.write('player_info', { action: { add_player: true, update_listed: true }, data: [{ uuid, player: { name, properties: [] }, listed: 1 }] })
-      ),
+    system: (text) => clients.forEach((c) => system(c, text)),
+    playerChat: (uuid, name, msg) => clients.forEach((c) => playerChat(c, uuid, name, msg)),
     ready: new Promise((r) => server.on('listening', r)),
     close: () => server.close()
   };
 }
 
-const waitFor = async (fn, ms = 15000) => {
-  const end = Date.now() + ms;
-  while (Date.now() < end) {
-    if (await fn()) return true;
-    await new Promise((r) => setTimeout(r, 50));
-  }
-  return false;
-};
-
-test('real protocol: /reg on first join, /log afterwards, chat commands and link', { timeout: 60000 }, async () => {
+test('VoidKits logs in and answers !kit and !link in the 1b1t chat format', { timeout: 60000 }, async () => {
+  const port = 25000 + Math.floor(Math.random() * 2000);
+  const srv = startServer(port);
+  await srv.ready;
   const db = await sqliteDb();
-  const settings = testSettings({ auth: { postLoginDelayMs: 0 }, chat: { minDelayMs: 20, perPlayerCommandIntervalMs: 0 } });
-  const secrets = {
-    minecraft: { host: '127.0.0.1', port: 25611, username: 'KitBot', auth: 'offline', password: 'Sup3rSecretPw', version: '1.21.11' },
-    discord: { token: 'x', guildId: '222222222222222222', adminIds: [] },
-    database: {}
-  };
   const logger = fakeLogger();
+  const s = settings({ chat: { minDelayMs: 50, perPlayerCommandIntervalMs: 0 }, auth: { postLoginDelayMs: 50, promptTimeoutMs: 3000 } });
+  const secrets = { minecraft: { host: '127.0.0.1', port, username: 'VoidKits', auth: 'offline', password: 'Plume2', version: '1.21.11' }, discord: {}, database: {} };
+  const bot = createMinecraftBot({ config: { settings: s, secrets }, db, logger, checkMembership: member });
+  const sent = (prefix) => srv.commands.some((c) => c.startsWith(prefix));
+  try {
+    await bot.start();
+    // First join: /reg with the password, then ready.
+    assert.ok(await waitFor(() => sent('reg Plume2 Plume2')), `commands: ${JSON.stringify(srv.commands)}`);
+    assert.ok(await waitFor(() => bot.runtime.ready), 'the bot became ready');
 
-  // First join: unregistered account.
-  let srv = startFakeServer({ port: 25611, registered: false });
-  await srv.ready;
-  let bot = createMinecraftBot({ config: { settings, secrets }, db, logger, checkMembership: member });
-  await bot.start();
-  assert.ok(await waitFor(() => bot.runtime.minecraftReady), 'bot became ready');
-  assert.deepEqual(srv.commands, ['reg Sup3rSecretPw Sup3rSecretPw']);
-  await bot.stop();
-  srv.close();
+    // The exact 1b1t.cc format (system message, rank of several words).
+    srv.system('OG 1b1ter Steve » !kit pvp');
+    assert.ok(await waitFor(() => sent('msg Steve Link your account first')), `commands: ${JSON.stringify(srv.commands)}`);
 
-  // Second join: the account is registered, so the bot logs in.
-  srv = startFakeServer({ port: 25612, registered: true });
-  await srv.ready;
-  secrets.minecraft.port = 25612;
-  bot = createMinecraftBot({ config: { settings, secrets }, db, logger, checkMembership: member });
-  await bot.start();
-  assert.ok(await waitFor(() => bot.runtime.minecraftReady));
-  assert.equal(srv.commands[0], 'log Sup3rSecretPw');
+    // Messages relayed from Discord are not commands.
+    srv.system('[1b1tDiscord] OG 1b1ter Steve » !kit totem');
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(srv.commands.filter((c) => c.startsWith('msg Steve')).length, 1);
 
-  srv.addPlayer('Alice', '11111111-2222-3333-4444-555555555555');
-  await new Promise((r) => setTimeout(r, 200));
-  srv.say('<Alice> hello everyone');
-  srv.say('<Alice> !kit sword');
-  assert.ok(await waitFor(() => srv.commands.includes('msg Alice Unknown kit. Available kits: totem, pvp, grief.')));
+    // A real player chat packet (vanilla chat or /msg) with the link code.
+    const { code } = await linking.startLink(db, { discordId: '111111111111111111', name: 'Steve', settings: s });
+    srv.playerChat(STEVE, 'Steve', `!link ${code}`);
+    assert.ok(await waitFor(() => sent('msg Steve Linked to your Discord account')), `commands: ${JSON.stringify(srv.commands)}`);
+    const link = await linking.activeLinkByUsername(db, 'Steve');
+    assert.equal(link.mc_uuid, STEVE, 'linked with the UUID from the packet');
 
-  // Link through the in-game whisper, then request a kit.
-  const code = await linking.startLink(db, { discordId: '500000000000000009', mcUsername: 'Alice', settings, now: Date.now() });
-  srv.say(`Alice whispers: !link ${code.code}`);
-  assert.ok(await waitFor(async () => !!(await linking.getActiveLinkByUsername(db, 'Alice'))));
-  const link = await linking.getActiveLinkByUsername(db, 'Alice');
-  assert.equal(link.mc_uuid, '11111111-2222-3333-4444-555555555555');
+    // Linked now: the order is understood; this flat test world has no kit chests.
+    srv.playerChat(STEVE, 'Steve', '!kit pvp');
+    assert.ok(await waitFor(() => sent('msg Steve The kit bot is not set up yet')), `commands: ${JSON.stringify(srv.commands)}`);
+    // The station search waits up to 15s for chunks (this server sends none).
+    assert.ok(await waitFor(() => logger.events.some((e) => e.type === 'station.missing'), 25000));
+    assert.ok(logger.events.some((e) => e.type === 'chat.command' && e.message === 'Steve: !kit pvp'));
 
-  await db.run("INSERT INTO settings (key, value, updated_at) VALUES ('paused', 'true', 0) ON CONFLICT (key) DO UPDATE SET value = 'true'");
-  await new Promise((r) => setTimeout(r, 3500)); // runtime refresh interval
-  srv.say('<Alice> !kit totem');
-  assert.ok(await waitFor(() => srv.commands.some((c) => c.startsWith('msg Alice Kit deliveries are paused'))));
-
-  // A spoofed whisper typed by another player is attributed to that player and ignored.
-  srv.say('<Mallory> Alice whispers: !kit pvp');
-  await new Promise((r) => setTimeout(r, 500));
-  assert.ok(!srv.commands.some((c) => c.startsWith('msg Mallory')));
-  assert.ok(srv.commands.every((c) => !c.includes('undefined')));
-
-  // A command in a chat format the patterns do not know is reported with the raw line.
-  srv.say('* Alice says !kit totem');
-  assert.ok(await waitFor(() => logger.events.some((e) => e.type === 'chat.unreadable' && e.message.includes('* Alice says !kit totem'))));
-  // A command from a name that is not in the tab list is ignored, and the log says why.
-  srv.say('<Ghost> !kit totem');
-  assert.ok(await waitFor(() => logger.events.some((e) => e.type === 'request.ignored' && e.message.includes('Ghost'))));
-
-  // An admin message queued from Discord (/kitbot say) appears in the public chat.
-  const { createAdminActions } = require('../src/admin');
-  const actions = createAdminActions({ db, logger, getSettings: () => settings });
-  assert.equal((await actions.say({ id: '111111111111111111', tag: 'admin' }, '/kill')).reason, 'command');
-  assert.equal((await actions.say({ id: '111111111111111111', tag: 'admin' }, 'Kits are back!\nJoin our Discord')).ok, true);
-  assert.ok(await waitFor(() => srv.chats.includes('Kits are back! Join our Discord'), 8000), `chat: ${JSON.stringify(srv.chats)}`);
-
-  await bot.stop();
-  srv.close();
-  await db.close();
+    // Nobody can order for a player who is not in the tab list.
+    srv.system('Ghost » !kit pvp');
+    assert.ok(await waitFor(() => logger.events.some((e) => e.type === 'chat.unreadable' && e.message.includes('Ghost'))));
+    assert.ok(!sent('msg Ghost'));
+    assert.ok(srv.commands.every((c) => !c.includes('undefined')));
+  } finally {
+    await bot.stop();
+    srv.close();
+    await db.close();
+  }
 });

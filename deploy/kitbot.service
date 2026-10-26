@@ -2,7 +2,7 @@
 #   sudo cp deploy/kitbot.service /etc/systemd/system/kitbot.service
 #   sudo systemctl daemon-reload && sudo systemctl enable --now kitbot
 [Unit]
-Description=Anarchy KitBot (Minecraft + Discord)
+Description=VoidKits (Minecraft kit bot + Discord)
 After=network-online.target
 Wants=network-online.target
 

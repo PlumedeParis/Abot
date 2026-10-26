@@ -1,40 +1,41 @@
 'use strict';
 
-// Configuration loading and validation.
-// Secrets come ONLY from environment variables (GitHub Secrets / .env).
-// Non-secret settings (kit locations, limits, chat patterns) come from a JSON
-// file (config.json) or from the KITBOT_CONFIG_JSON environment variable, so
-// that stash coordinates never have to be committed to a public repository.
+// Configuration.
+//   Secrets (passwords, tokens, database URL) come only from environment
+//   variables: GitHub Secrets on Actions, or a local .env file.
+//   Settings (kits, limits, chat, delivery) are built-in defaults, optionally
+//   overridden by config.json or by the KITBOT_CONFIG_JSON variable.
 
 const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.resolve(__dirname, '..');
 const KIT_NAMES = ['totem', 'pvp', 'grief'];
-const DIRECTIONS = ['left', 'right', 'backward', 'forward'];
+const DIRECTIONS = ['left', 'right', 'forward', 'backward'];
+// Minecraft F3 yaw in degrees for each cardinal facing.
 const FACINGS = { south: 0, west: 90, north: 180, east: -90 };
-const DELIVERY_METHODS = ['drop', 'teleport'];
-const RETRIEVAL_METHODS = ['chest', 'command'];
 
 const DEFAULTS = {
   server: {
+    // Set to true by the workflow checkbox (KITBOT_BOTS_ALLOWED=true).
     botsAllowedConfirmed: false,
-    rulesUrl: '',
     version: '1.21.11',
+    // A kick matching this stops the bot for good instead of reconnecting.
     stopOnKickPattern: '(banned|blacklisted|bots? (are )?not allowed)'
   },
+  // AuthMe-style login on cracked servers: /reg on the first join, /log after.
   auth: {
     enabled: true,
     registerCommand: '/reg {password} {password}',
     loginCommand: '/log {password}',
     registerPromptPattern: '/reg(ister)?\\b',
-    loginPromptPattern: '/l(og|ogin)\\b',
+    loginPromptPattern: '/l(og|ogin)?\\b',
     successPattern: '(success|logged in)',
     alreadyRegisteredPattern: 'already (been )?registered',
     notRegisteredPattern: "(isn't|is not|not) registered",
-    failurePattern: '(wrong password|incorrect password|invalid password)',
+    failurePattern: '(wrong|incorrect|invalid) password',
     promptTimeoutMs: 10000,
-    successTimeoutMs: 15000,
+    replyTimeoutMs: 15000,
     postLoginCommands: [],
     postLoginDelayMs: 3000
   },
@@ -42,22 +43,20 @@ const DEFAULTS = {
     kitCommand: '!kit',
     linkCommand: '!link',
     replyCommand: '/msg {player} {message}',
-    minDelayMs: 1500,
+    // Delay between two messages the bot sends (server anti-spam).
+    minDelayMs: 1200,
     maxLength: 240,
-    // Public message after each confirmed delivery ("" to turn it off).
-    deliveryAnnouncement: '{player} just received a {kit} kit. Order one yourself by doing !kit totem/pvp/grief',
+    // Public line after each confirmed delivery ("" turns it off).
+    deliveryAnnouncement: '{player} just got a {kit} kit from VoidKits! Get yours: !kit totem / pvp / grief',
     perPlayerCommandIntervalMs: 3000,
-    duplicateWindowMs: 5000,
+    // Commands are only accepted from players who are in the tab list.
     requireOnlinePlayer: true,
-    patterns: [
-      '^<(?<username>[A-Za-z0-9_]{1,16})> (?<message>.+)$',
-      '^(?<username>[A-Za-z0-9_]{1,16}) whispers(?: to you)?: (?<message>.+)$',
-      '^\\[(?<username>[A-Za-z0-9_]{1,16}) -> (?:me|you)\\] (?<message>.+)$',
-      '^From (?<username>[A-Za-z0-9_]{1,16}): (?<message>.+)$',
-      '^(?<username>[A-Za-z0-9_]{1,16}) -> (?:me|you): (?<message>.+)$',
-      // Plugin chat formats such as "[VIP] Name: msg" or "Name » msg" (keep last).
-      '^(?:\\[[^\\]]{1,32}\\] ?)*(?<username>[A-Za-z0-9_]{1,16}) ?(?:»|>>|:) (?<message>.+)$'
-    ]
+    // Chat lines matching this (case-insensitive) are never commands, e.g.
+    // messages relayed from a Discord server, whose authors are not in game.
+    ignorePattern: '^\\[[^\\]]*discord[^\\]]*\\]',
+    // Optional extra formats, tried first: anchored regexes with
+    // (?<username>...) and (?<message>...) groups.
+    patterns: []
   },
   limits: {
     cooldownMinutes: 10,
@@ -82,90 +81,137 @@ const DEFAULTS = {
     confirmationTimeoutSeconds: 60
   },
   navigation: {
-    // With autoDetect, an unset home is read from where the bot stands, and
-    // the kit chests are found to its left, right and in front (src/station.js).
+    // Find the kit chests around the bot after login (src/station.js).
     autoDetect: true,
     scanDistance: 6,
+    // Set explicitly: { x, y, z, facing: "north" } (otherwise detected).
     home: null,
     returnHomeAfterDelivery: true,
     allowDigging: false,
-    allowPlacing: false,
     allowParkour: false,
     allowSprinting: true,
     arriveRadius: 1,
-    defaultTimeoutMs: 60000,
-    // Too far to walk home (e.g. after teleporting to a player): run these
-    // commands, e.g. "/kill" to respawn at the bed next to the base.
+    timeoutMs: 60000,
+    // Farther than this from home, the bot runs returnCommands instead of
+    // walking (default /kill: respawn at the bed next to the base).
     farFromHomeBlocks: 32,
     returnCommands: ['/kill'],
     respawnWaitMs: 20000
   },
-  // Default: the bot sends /tpa to the player, who accepts with /tpaccept.
-  // "drop" instead: the bot waits at delivery.dropoff (default: home).
   delivery: {
+    // "teleport": run commands (default /tpa), wait for the player to accept.
+    // "drop": wait at the drop-off point (default: home) for the player.
     method: 'teleport',
-    dropoff: null,
     commands: ['/tpa {player}'],
-    acceptRequest: null,
-    afterCommands: [],
-    instructions: 'Your {kit} kit is ready! Accept my teleport request (/tpaccept) within 60 seconds to receive it.',
+    dropoff: null,
+    instructions: 'Your {kit} kit is ready! Accept my teleport request with /tpaccept within 60 seconds.',
     playerRadius: 4,
     waitForPlayerMs: 60000,
-    pickupTimeoutMs: 15000,
-    returnUndelivered: true
+    pickupTimeoutMs: 15000
   },
-  stock: {
-    // Alert in the log channel when a kit chest has this many kits or fewer.
-    lowThreshold: 5
-  },
+  stock: { lowThreshold: 5 },
+  // Each kit is one item stack taken from its chest (default: a shulker box).
   kits: {
-    totem: { direction: 'left', distance: null, standAt: null, retrieval: { method: 'chest', container: null, items: [{ nameRegex: 'shulker_box$', count: 1 }] } },
-    pvp: { direction: 'right', distance: null, standAt: null, retrieval: { method: 'chest', container: null, items: [{ nameRegex: 'shulker_box$', count: 1 }] } },
-    grief: { direction: 'forward', distance: null, standAt: null, retrieval: { method: 'chest', container: null, items: [{ nameRegex: 'shulker_box$', count: 1 }] } }
+    totem: { direction: 'left', items: [{ nameRegex: 'shulker_box$', count: 1 }] },
+    pvp: { direction: 'right', items: [{ nameRegex: 'shulker_box$', count: 1 }] },
+    grief: { direction: 'forward', items: [{ nameRegex: 'shulker_box$', count: 1 }] }
   },
-  logging: {
-    retentionDays: 30,
-    consoleLevel: 'INFO'
-  }
+  logging: { retentionDays: 30, consoleLevel: 'INFO' }
 };
 
-function isPlainObject(v) {
-  return v !== null && typeof v === 'object' && !Array.isArray(v);
-}
+const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
+const isPos = (v) => isObject(v) && isNum(v.x) && isNum(v.y) && isNum(v.z);
 
 function deepMerge(base, override) {
-  if (!isPlainObject(base) || !isPlainObject(override)) return override === undefined ? base : override;
+  if (!isObject(base) || !isObject(override)) return override === undefined ? base : override;
   const out = { ...base };
-  for (const [k, v] of Object.entries(override)) {
-    out[k] = isPlainObject(v) && isPlainObject(base[k]) ? deepMerge(base[k], v) : v;
-  }
+  for (const [k, v] of Object.entries(override)) out[k] = isObject(v) && isObject(base[k]) ? deepMerge(base[k], v) : v;
   return out;
 }
 
-function readSettingsSource(env) {
-  if (env.KITBOT_CONFIG_JSON && env.KITBOT_CONFIG_JSON.trim()) {
-    let raw = env.KITBOT_CONFIG_JSON.trim();
-    // Accept either raw JSON or base64-encoded JSON (easier to paste as a secret).
-    if (!raw.startsWith('{')) raw = Buffer.from(raw, 'base64').toString('utf8');
-    return { source: 'KITBOT_CONFIG_JSON', json: JSON.parse(raw) };
+function readSettingsJson(env) {
+  const raw = (env.KITBOT_CONFIG_JSON || '').trim();
+  if (raw) {
+    // Raw JSON, or base64 (easier to paste as a secret).
+    return { source: 'KITBOT_CONFIG_JSON', json: JSON.parse(raw.startsWith('{') ? raw : Buffer.from(raw, 'base64').toString('utf8')) };
   }
   const file = path.resolve(ROOT, env.KITBOT_CONFIG || 'config.json');
   if (!fs.existsSync(file)) {
-    // An explicitly named file must exist; otherwise run on the built-in defaults.
     if (env.KITBOT_CONFIG) throw new Error(`Configuration file not found: ${file}`);
     return { source: 'built-in defaults', json: {} };
   }
-  return { source: file, json: JSON.parse(fs.readFileSync(file, 'utf8')) };
+  return { source: path.basename(file), json: JSON.parse(fs.readFileSync(file, 'utf8')) };
 }
 
-function parseIdList(value) {
+function validateSettings(s) {
+  const errors = [];
+  const positive = (where, v) => {
+    if (!isNum(v) || v <= 0) errors.push(`${where} must be a positive number`);
+  };
+  const regex = (where, p) => {
+    try {
+      new RegExp(p, 'i');
+    } catch (e) {
+      errors.push(`${where} is not a valid regular expression (${e.message})`);
+    }
+  };
+  for (const [k, v] of Object.entries(s.limits)) positive(`limits.${k}`, v);
+  for (const k of ['maxLinksPerDiscord', 'codeTtlMinutes', 'usernameChangeCooldownDays', 'maxFailedCodeAttemptsPerHour']) positive(`linking.${k}`, s.linking[k]);
+  positive('chat.maxLength', s.chat.maxLength);
+  for (const k of ['kitCommand', 'linkCommand']) if (!/^![a-z]{1,16}$/i.test(s.chat[k])) errors.push(`chat.${k} must look like "!kit"`);
+  if (!s.chat.replyCommand.includes('{player}') || !s.chat.replyCommand.includes('{message}')) errors.push('chat.replyCommand must contain {player} and {message}');
+  if (s.chat.ignorePattern) regex('chat.ignorePattern', s.chat.ignorePattern);
+  if (!Array.isArray(s.chat.patterns)) errors.push('chat.patterns must be a list');
+  else
+    s.chat.patterns.forEach((p, i) => {
+      regex(`chat.patterns[${i}]`, p);
+      if (!String(p).startsWith('^') || !p.includes('(?<username>') || !p.includes('(?<message>')) {
+        errors.push(`chat.patterns[${i}] must start with ^ and contain (?<username>...) and (?<message>...)`);
+      }
+    });
+  for (const k of ['registerPromptPattern', 'loginPromptPattern', 'successPattern', 'alreadyRegisteredPattern', 'notRegisteredPattern', 'failurePattern']) regex(`auth.${k}`, s.auth[k]);
+  regex('server.stopOnKickPattern', s.server.stopOnKickPattern);
+  if (!Number.isInteger(s.stock.lowThreshold) || s.stock.lowThreshold < 0) errors.push('stock.lowThreshold must be a whole number');
+
+  const home = s.navigation.home;
+  if (home !== null) {
+    if (!isPos(home)) errors.push('navigation.home must be { "x", "y", "z", "facing" }');
+    else if (!(home.facing in FACINGS)) errors.push(`navigation.home.facing must be one of ${Object.keys(FACINGS).join(', ')}`);
+  }
+  if (!['teleport', 'drop'].includes(s.delivery.method)) errors.push('delivery.method must be "teleport" or "drop"');
+  if (s.delivery.method === 'teleport' && (!Array.isArray(s.delivery.commands) || !s.delivery.commands.length)) errors.push('delivery.commands is required for the teleport method');
+  if (s.delivery.dropoff !== null && !isPos(s.delivery.dropoff)) errors.push('delivery.dropoff must be { "x", "y", "z" } or null');
+
+  for (const name of Object.keys(s.kits)) if (!KIT_NAMES.includes(name)) errors.push(`kits.${name}: unknown kit (allowed: ${KIT_NAMES.join(', ')})`);
+  for (const name of KIT_NAMES) {
+    const kit = s.kits[name];
+    if (!isObject(kit)) {
+      errors.push(`kits.${name} is missing`);
+      continue;
+    }
+    if (!DIRECTIONS.includes(kit.direction)) errors.push(`kits.${name}.direction must be one of ${DIRECTIONS.join(', ')}`);
+    if (kit.container !== undefined && kit.container !== null && !isPos(kit.container)) errors.push(`kits.${name}.container must be { "x", "y", "z" }`);
+    if (kit.standAt !== undefined && kit.standAt !== null && !isPos(kit.standAt)) errors.push(`kits.${name}.standAt must be { "x", "y", "z" }`);
+    if (!Array.isArray(kit.items) || !kit.items.length) errors.push(`kits.${name}.items must list the kit items`);
+    else
+      kit.items.forEach((it, i) => {
+        if (!isObject(it) || (!it.name && !it.nameRegex)) errors.push(`kits.${name}.items[${i}] needs "name" or "nameRegex"`);
+        else if (it.nameRegex) regex(`kits.${name}.items[${i}].nameRegex`, it.nameRegex);
+        if (!it || !Number.isInteger(it.count) || it.count <= 0) errors.push(`kits.${name}.items[${i}].count must be a positive whole number`);
+      });
+  }
+  if (!s.navigation.autoDetect && !home) errors.push('navigation.home is required when navigation.autoDetect is false');
+  return errors;
+}
+
+function parseIds(value) {
   return String(value || '')
     .split(/[\s,]+/)
-    .map((s) => s.trim())
     .filter(Boolean);
 }
 
-function loadSecrets(env) {
+function loadSecrets(env = process.env) {
   return {
     minecraft: {
       host: env.MINECRAFT_HOST || '',
@@ -180,7 +226,7 @@ function loadSecrets(env) {
       guildId: env.DISCORD_GUILD_ID || '',
       logChannelId: env.DISCORD_LOG_CHANNEL_ID || '',
       deliveriesChannelId: env.DISCORD_DELIVERIES_CHANNEL_ID || '',
-      adminIds: parseIdList(env.DISCORD_ADMIN_IDS)
+      adminIds: parseIds(env.DISCORD_ADMIN_IDS)
     },
     database: {
       url: env.DATABASE_URL || '',
@@ -189,221 +235,57 @@ function loadSecrets(env) {
   };
 }
 
-const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
-const isPos = (v) => isPlainObject(v) && isNum(v.x) && isNum(v.y) && isNum(v.z);
-
-function checkRegex(errors, where, pattern) {
-  try {
-    new RegExp(pattern, 'i');
-  } catch (e) {
-    errors.push(`${where}: invalid regular expression (${e.message})`);
-  }
-}
-
-// Validates the merged settings. With allowPlaceholders, unset (null)
-// coordinates are accepted so config.example.json can be checked in CI.
-function validateSettings(s, { allowPlaceholders = false } = {}) {
-  const errors = [];
-  // Coordinates left unset are filled in at runtime by station auto-detection.
-  if (s.navigation.autoDetect && s.navigation.home === null) allowPlaceholders = true;
-  const needPos = (where, v) => {
-    const placeholder = v === null || v === undefined || (isPlainObject(v) && v.x === null && v.y === null && v.z === null);
-    if (placeholder) {
-      if (!allowPlaceholders) errors.push(`${where}: coordinates must be set ({"x":..,"y":..,"z":..})`);
-    } else if (!isPos(v)) {
-      errors.push(`${where}: must be an object with numeric x, y and z`);
-    }
-  };
-  const positive = (where, v) => {
-    if (!isNum(v) || v <= 0) errors.push(`${where}: must be a positive number`);
-  };
-
-  positive('limits.cooldownMinutes', s.limits.cooldownMinutes);
-  positive('limits.dailyQuota', s.limits.dailyQuota);
-  positive('limits.quotaWindowHours', s.limits.quotaWindowHours);
-  positive('limits.globalPerMinute', s.limits.globalPerMinute);
-  positive('limits.maxQueueSize', s.limits.maxQueueSize);
-  positive('limits.maxQueueWaitMinutes', s.limits.maxQueueWaitMinutes);
-  positive('limits.maxAttempts', s.limits.maxAttempts);
-  positive('linking.maxLinksPerDiscord', s.linking.maxLinksPerDiscord);
-  positive('linking.codeTtlMinutes', s.linking.codeTtlMinutes);
-  positive('linking.usernameChangeCooldownDays', s.linking.usernameChangeCooldownDays);
-  positive('chat.maxLength', s.chat.maxLength);
-  if (!Number.isInteger(s.stock.lowThreshold) || s.stock.lowThreshold < 0) errors.push('stock.lowThreshold: must be a whole number (0 or more)');
-
-  if (!/^![a-z]+$/i.test(s.chat.kitCommand)) errors.push('chat.kitCommand: must look like "!kit"');
-  if (!/^![a-z]+$/i.test(s.chat.linkCommand)) errors.push('chat.linkCommand: must look like "!link"');
-  if (!s.chat.replyCommand.includes('{player}') || !s.chat.replyCommand.includes('{message}')) {
-    errors.push('chat.replyCommand: must contain {player} and {message}');
-  }
-  if (!Array.isArray(s.chat.patterns) || s.chat.patterns.length === 0) {
-    errors.push('chat.patterns: at least one pattern is required');
-  } else {
-    s.chat.patterns.forEach((p, i) => {
-      checkRegex(errors, `chat.patterns[${i}]`, p);
-      if (!p.includes('(?<username>') || !p.includes('(?<message>')) {
-        errors.push(`chat.patterns[${i}]: must contain named groups (?<username>...) and (?<message>...)`);
-      }
-      if (!p.startsWith('^')) errors.push(`chat.patterns[${i}]: must be anchored with ^ to prevent spoofing`);
-    });
-  }
-  for (const key of ['registerPromptPattern', 'loginPromptPattern', 'successPattern', 'alreadyRegisteredPattern', 'notRegisteredPattern', 'failurePattern']) {
-    checkRegex(errors, `auth.${key}`, s.auth[key]);
-  }
-
-  const home = s.navigation.home;
-  if (home !== null) {
-    needPos('navigation.home', home);
-    if (home && home.facing !== undefined && !(home.facing in FACINGS)) {
-      errors.push(`navigation.home.facing: must be one of ${Object.keys(FACINGS).join(', ')}`);
-    }
-    if (home && home.yawDegrees !== undefined && !isNum(home.yawDegrees)) {
-      errors.push('navigation.home.yawDegrees: must be a number (F3 "Facing" yaw)');
-    }
-  }
-
-  for (const name of KIT_NAMES) {
-    const kit = s.kits[name];
-    const w = `kits.${name}`;
-    if (!isPlainObject(kit)) {
-      errors.push(`${w}: missing kit definition`);
-      continue;
-    }
-    if (!DIRECTIONS.includes(kit.direction)) errors.push(`${w}.direction: must be one of ${DIRECTIONS.join(', ')}`);
-    if (kit.standAt === null || kit.standAt === undefined) {
-      if (!isNum(kit.distance) || kit.distance <= 0) {
-        if (!allowPlaceholders) errors.push(`${w}: set either "standAt" coordinates or a positive "distance" from navigation.home`);
-      } else if (home === null && !allowPlaceholders) {
-        errors.push(`${w}: "distance" requires navigation.home to be set`);
-      }
-    } else {
-      needPos(`${w}.standAt`, kit.standAt);
-    }
-    if (kit.timeoutMs !== undefined) positive(`${w}.timeoutMs`, kit.timeoutMs);
-
-    const r = kit.retrieval;
-    if (!isPlainObject(r) || !RETRIEVAL_METHODS.includes(r.method)) {
-      errors.push(`${w}.retrieval.method: must be one of ${RETRIEVAL_METHODS.join(', ')}`);
-    } else {
-      if (!Array.isArray(r.items) || r.items.length === 0) {
-        errors.push(`${w}.retrieval.items: list the items that make up the kit`);
-      } else {
-        r.items.forEach((it, i) => {
-          if (!isPlainObject(it) || (!it.name && !it.nameRegex)) errors.push(`${w}.retrieval.items[${i}]: needs "name" or "nameRegex"`);
-          if (it && it.nameRegex) checkRegex(errors, `${w}.retrieval.items[${i}].nameRegex`, it.nameRegex);
-          if (!it || !Number.isInteger(it.count) || it.count <= 0) errors.push(`${w}.retrieval.items[${i}].count: must be a positive integer`);
-        });
-      }
-      if (r.method === 'chest') needPos(`${w}.retrieval.container`, r.container);
-      if (r.method === 'command') {
-        if (!Array.isArray(r.commands) || r.commands.length === 0) errors.push(`${w}.retrieval.commands: required for the "command" method`);
-      }
-    }
-
-    const d = resolveDelivery(s, name);
-    if (!DELIVERY_METHODS.includes(d.method)) errors.push(`${w}.delivery.method: must be one of ${DELIVERY_METHODS.join(', ')}`);
-    if (d.method === 'drop' && d.dropoff !== null) needPos(`${w}.delivery.dropoff`, d.dropoff);
-    if (d.method === 'teleport' && (!Array.isArray(d.commands) || d.commands.length === 0) && !d.acceptRequest) {
-      errors.push(`${w}.delivery: the "teleport" method needs "commands" (e.g. ["/tpa {player}"]) or "acceptRequest"`);
-    }
-    if (d.acceptRequest) {
-      if (!d.acceptRequest.pattern || !d.acceptRequest.command) errors.push(`${w}.delivery.acceptRequest: needs "pattern" and "command"`);
-      else checkRegex(errors, `${w}.delivery.acceptRequest.pattern`, d.acceptRequest.pattern);
-    }
-  }
-  for (const name of Object.keys(s.kits)) {
-    if (!KIT_NAMES.includes(name)) errors.push(`kits.${name}: unknown kit (allowed: ${KIT_NAMES.join(', ')})`);
-  }
-  return errors;
-}
-
-// A missing drop-off point defaults to the bot's home spot.
-function resolveDelivery(settings, kitName) {
-  const kit = settings.kits[kitName] || {};
-  const d = deepMerge(settings.delivery, kit.delivery || {});
-  if (!d.dropoff && settings.navigation.home) d.dropoff = { x: settings.navigation.home.x, y: settings.navigation.home.y, z: settings.navigation.home.z };
-  return d;
-}
-
 function validateSecrets(secrets, role) {
   const errors = [];
-  const needsMc = role === 'all' || role === 'minecraft';
-  const needsDiscord = true; // membership checks in the Minecraft role also need the Discord token
-  if (needsMc) {
+  const snowflake = /^\d{15,22}$/;
+  if (role !== 'discord') {
     if (!secrets.minecraft.host) errors.push('MINECRAFT_HOST is required');
-    if (!secrets.minecraft.username) errors.push('MINECRAFT_USERNAME is required');
+    if (!/^[A-Za-z0-9_]{3,16}$/.test(secrets.minecraft.username)) errors.push('MINECRAFT_USERNAME must be a Minecraft username (3-16 letters, digits or _)');
     if (!['offline', 'microsoft'].includes(secrets.minecraft.auth)) errors.push('MINECRAFT_AUTH must be "offline" or "microsoft"');
     if (!Number.isInteger(secrets.minecraft.port) || secrets.minecraft.port <= 0) errors.push('MINECRAFT_PORT must be a port number');
   }
-  // Server, log channel and admins are optional: src/discord-setup.js finds
-  // the server, creates #kitbot-logs and uses the server owner as admin.
-  if (needsDiscord) {
-    if (!secrets.discord.token) errors.push('DISCORD_TOKEN is required');
-    if (secrets.discord.guildId && !/^\d{15,22}$/.test(secrets.discord.guildId)) errors.push('DISCORD_GUILD_ID must be a Discord server ID');
+  // Both roles need the token: kit requests are checked against Discord membership.
+  if (!secrets.discord.token) errors.push('DISCORD_TOKEN is required');
+  for (const k of ['guildId', 'logChannelId', 'deliveriesChannelId']) {
+    if (secrets.discord[k] && !snowflake.test(secrets.discord[k])) errors.push(`DISCORD ${k} must be a Discord ID`);
   }
-  if (secrets.discord.logChannelId && !/^\d{15,22}$/.test(secrets.discord.logChannelId)) errors.push('DISCORD_LOG_CHANNEL_ID must be a channel ID');
-  if (secrets.discord.deliveriesChannelId && !/^\d{15,22}$/.test(secrets.discord.deliveriesChannelId)) errors.push('DISCORD_DELIVERIES_CHANNEL_ID must be a channel ID');
-  for (const id of secrets.discord.adminIds) if (!/^\d{15,22}$/.test(id)) errors.push(`DISCORD_ADMIN_IDS contains an invalid ID: ${id}`);
+  for (const id of secrets.discord.adminIds) if (!snowflake.test(id)) errors.push(`DISCORD_ADMIN_IDS contains an invalid ID: ${id}`);
   return errors;
 }
 
-// Values that must never appear in logs or Discord messages.
+// Values that must never be printed.
 function secretValues(secrets) {
-  const vals = [secrets.minecraft.password, secrets.discord.token, secrets.database.url];
+  const values = [secrets.minecraft.password, secrets.discord.token, secrets.database.url];
   try {
-    if (secrets.database.url) {
-      const u = new URL(secrets.database.url);
-      if (u.password) vals.push(decodeURIComponent(u.password));
-    }
+    const u = new URL(secrets.database.url);
+    if (u.password) values.push(decodeURIComponent(u.password));
   } catch {
-    // not a URL; the full value is already redacted
+    // not a URL
   }
-  return vals.filter((v) => typeof v === 'string' && v.length >= 3);
+  return values.filter((v) => typeof v === 'string' && v.length >= 3);
 }
 
-function loadSettings(env = process.env, opts = {}) {
-  const { source, json } = readSettingsSource(env);
-  const settings = deepMerge(DEFAULTS, json);
-  // Set by the "Run KitBot" workflow checkbox confirming the server rules.
+function loadSettings(env = process.env) {
+  const { source, json } = readSettingsJson(env);
+  const settings = deepMerge(structuredClone(DEFAULTS), json);
   if (String(env.KITBOT_BOTS_ALLOWED || '').toLowerCase() === 'true') settings.server.botsAllowedConfirmed = true;
-  const errors = validateSettings(settings, opts);
-  return { settings, errors, source };
+  return { settings, source, errors: validateSettings(settings) };
 }
 
-function loadConfig({ env = process.env, role = 'all', allowPlaceholders = false } = {}) {
+function loadConfig({ env = process.env, role = 'all' } = {}) {
   const secrets = loadSecrets(env);
-  const { settings, errors, source } = loadSettings(env, { allowPlaceholders });
+  const { settings, source, errors } = loadSettings(env);
   if (!secrets.minecraft.version) secrets.minecraft.version = settings.server.version;
   const all = [...errors, ...validateSecrets(secrets, role)];
-  if ((role === 'all' || role === 'minecraft') && settings.server.botsAllowedConfirmed !== true && !allowPlaceholders) {
-    all.push('server.botsAllowedConfirmed must be true: read the server rules and confirm automated bots are allowed before enabling the Minecraft bot');
+  if (role !== 'discord' && !settings.server.botsAllowedConfirmed) {
+    all.push('The server rules must allow bots: tick the box when you start the workflow (or set KITBOT_BOTS_ALLOWED=true)');
   }
-  if (all.length) {
-    const err = new Error(`Invalid configuration:\n - ${all.join('\n - ')}`);
-    err.errors = all;
-    throw err;
-  }
+  if (all.length) throw Object.assign(new Error(`Invalid configuration:\n - ${all.join('\n - ')}`), { errors: all });
   return { settings, secrets, source, role };
 }
 
-// Loads .env when present (local development). GitHub Actions passes real env vars.
 function loadDotEnv(file = path.join(ROOT, '.env')) {
   if (fs.existsSync(file) && typeof process.loadEnvFile === 'function') process.loadEnvFile(file);
 }
 
-module.exports = {
-  KIT_NAMES,
-  DIRECTIONS,
-  FACINGS,
-  DEFAULTS,
-  deepMerge,
-  loadConfig,
-  loadSettings,
-  loadSecrets,
-  loadDotEnv,
-  validateSettings,
-  validateSecrets,
-  resolveDelivery,
-  secretValues,
-  parseIdList
-};
+module.exports = { KIT_NAMES, DIRECTIONS, FACINGS, DEFAULTS, deepMerge, validateSettings, loadSettings, loadSecrets, validateSecrets, loadConfig, loadDotEnv, secretValues };
