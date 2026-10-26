@@ -1,81 +1,68 @@
 'use strict';
 
-// Minecraft side: connection, server login (AuthMe-style /reg and /log),
-// chat command intake, outgoing chat throttling, reconnection and the
-// delivery worker.
+// The Minecraft side: connects, logs in (/reg or /log), reads the chat for
+// commands, finds the kit station and runs the delivery queue.
 
 const mineflayer = require('mineflayer');
-const { Vec3 } = require('vec3');
 const { pathfinder } = require('mineflayer-pathfinder');
-const { getSetting, setSetting, setStatus } = require('./database');
+const { Vec3 } = require('vec3');
+const { getSetting, setSetting, setStatus } = require('./db');
 const { loadSettings } = require('./config');
-const { createRequestHandler, compilePatterns, parseChatLine, parseSignedChat, parseLooseCommand } = require('./requests');
+const chat = require('./chat');
+const { createCommandHandler } = require('./commands');
 const { createQueue, recoverInterrupted } = require('./queue');
-const { createKitService, numberBlockInteractions } = require('./kits');
+const { createDelivery, numberBlockInteractions } = require('./delivery');
+const { detectStation, describeStation } = require('./station');
 const linking = require('./linking');
 const { recordStock } = require('./stock');
-const { detectStation, applyStation, describeStation } = require('./station');
 
-const MC_MAX_CHAT = 256;
-
-function sanitizeOutgoing(text, maxLength) {
-  return String(text)
+const MAX_CHAT = 256;
+const fill = (template, values) => String(template).replace(/\{(\w+)\}/g, (m, k) => (k in values ? values[k] : m));
+const clean = (text, max = MAX_CHAT) =>
+  String(text)
     .replace(/[\u0000-\u001f\u007f§]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, Math.min(maxLength, MC_MAX_CHAT));
-}
+    .slice(0, Math.min(max, MAX_CHAT));
 
-function deliveryAnnouncement(template, req) {
-  if (!template) return '';
-  return fill(template, { player: req.mc_username, kit: req.kit });
-}
-
-function fill(template, values) {
-  return template.replace(/\{(\w+)\}/g, (m, k) => (k in values ? values[k] : m));
-}
-
-function createMinecraftBot({ config, db, logger, checkMembership, onSettingsReloaded = () => {} }) {
+function createMinecraftBot({ config, db, logger, checkMembership }) {
   const { secrets } = config;
   let settings = config.settings;
-  let baseSettings = config.settings; // settings before the detected station is applied
   const getSettings = () => settings;
-
-  const runtime = { paused: false, maintenance: false, minecraftReady: false, connected: false, stationReady: !!settings.navigation.home };
-  let station = null; // auto-detected kit station (see src/station.js)
-  let lastRecalibrateAt = null;
-  let lastStationError = null;
-  let lastStationAttempt = 0;
-  let detectingStation = false;
+  const runtime = { connected: false, ready: false, stationReady: false, paused: false, maintenance: false };
   let bot = null;
+  let station = null;
   let stopping = false;
   let reconnectTimer = null;
   let reconnectAttempt = 0;
-  let abortController = null;
-  let lastReloadAt = null;
-  let chatPatterns = compilePatterns(settings.chat.patterns);
-  const chatLineListeners = new Set();
-  let lastChatAt = 0;
+  let abort = null;
+  const timers = [];
+  const lineListeners = new Set();
+  let compiled = compile(settings);
+  let lastChatAt = Date.now();
+  let silenceWarned = false;
   let lastUnreadableAt = 0;
-  let chatSilenceWarned = false;
-  const mentionsCommand = (line) => {
-    const lower = line.toLowerCase();
-    return lower.includes(settings.chat.kitCommand.toLowerCase()) || lower.includes(settings.chat.linkCommand.toLowerCase());
-  };
-  const intervals = [];
+  let lastStationTry = 0;
+  let lastStationError = null;
+  let lastRecalibrate = null;
+  let lastReload = null;
 
-  // ---- outgoing chat (throttled to avoid server anti-spam kicks) ----------
+  function compile(s) {
+    return { ignore: s.chat.ignorePattern ? new RegExp(s.chat.ignorePattern, 'i') : null, patterns: s.chat.patterns.map((p) => new RegExp(p, 'i')) };
+  }
+
+  // ---- outgoing chat, one message every chat.minDelayMs ----------------------
   const outbox = [];
-  let sending = false;
-  function sendRaw(text) {
+  let pumping = false;
+  function send(text) {
     return new Promise((resolve, reject) => {
       outbox.push({ text, resolve, reject });
       pump();
     });
   }
   async function pump() {
-    if (sending) return;
-    sending = true;
+    if (pumping) return;
+    pumping = true;
     while (outbox.length) {
       const item = outbox.shift();
       if (!bot || !runtime.connected) {
@@ -90,41 +77,32 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
       }
       await new Promise((r) => setTimeout(r, settings.chat.minDelayMs));
     }
-    sending = false;
+    pumping = false;
+  }
+  const sendCommand = (cmd) => send(clean(cmd));
+  async function reply(name, message) {
+    if (!/^[A-Za-z0-9_]{1,16}$/.test(name)) return;
+    await send(fill(settings.chat.replyCommand, { player: name, message: clean(message, settings.chat.maxLength) })).catch(() => {});
   }
 
-  const sendCommand = (cmd) => sendRaw(sanitizeOutgoing(cmd, MC_MAX_CHAT));
-
-  async function reply(username, message) {
-    if (!/^[A-Za-z0-9_]{1,16}$/.test(username)) return;
-    const text = sanitizeOutgoing(message, settings.chat.maxLength);
-    try {
-      await sendRaw(fill(settings.chat.replyCommand, { player: username, message: text }));
-    } catch {
-      // offline or disconnected: the event is still logged
-    }
+  // ---- players -------------------------------------------------------------
+  // bot.players exists only once Mineflayer has loaded its plugins.
+  const onlineNames = () => (bot?.players ? Object.keys(bot.players) : []);
+  function onlinePlayer(name) {
+    if (!bot || !name) return null;
+    const exact = chat.onlineName(name, onlineNames());
+    const p = exact && bot.players[exact];
+    return p ? { username: p.username, uuid: p.uuid || null } : null;
   }
 
-  function getOnlinePlayer(username) {
-    if (!bot || !bot.players) return null;
-    let p = bot.players[username];
-    if (!p) {
-      const lower = username.toLowerCase();
-      p = Object.values(bot.players).find((x) => x.username && x.username.toLowerCase() === lower);
-    }
-    if (!p) return null;
-    return { username: p.username, uuid: p.uuid || null };
-  }
-
-  const kitService = createKitService({
+  // ---- delivery --------------------------------------------------------------
+  const delivery = createDelivery({
     getBot: () => bot,
     getSettings,
+    getStation: () => station,
     logger,
     sendCommand,
-    onChatLine: (fn) => {
-      chatLineListeners.add(fn);
-      return () => chatLineListeners.delete(fn);
-    },
+    onChatLine: (fn) => (lineListeners.add(fn), () => lineListeners.delete(fn)),
     onStock: (kit, left) => recordStock(db, logger, { kit, left, lowThreshold: settings.stock.lowThreshold })
   });
 
@@ -132,341 +110,206 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
     db,
     getSettings,
     logger,
-    canRun: () => runtime.minecraftReady && runtime.stationReady && !runtime.paused && !runtime.maintenance && !stopping,
-    verify: async (req) => {
-      const link = await linking.getActiveLinkByUsername(db, req.mc_username);
-      if (!link || link.discord_id !== req.discord_id) return { ok: false, reason: 'account link no longer active' };
+    canRun: () => runtime.ready && runtime.stationReady && !runtime.paused && !runtime.maintenance && !stopping,
+    async verify(req) {
+      const link = await linking.activeLinkByUsername(db, req.mc_username);
+      if (!link || link.discord_id !== req.discord_id) return { ok: false, reason: 'the account link is no longer active' };
       const m = await checkMembership(req.discord_id);
-      if (m.status === 'unavailable') return { ok: false, retryLater: true, reason: 'Discord membership verification unavailable' };
-      if (m.status !== 'member') {
-        if (m.status === 'not_member') {
-          await linking.revokeLinks(db, req.discord_id, 'left the Discord server');
-          await logger.warn('link.revoked', `Revoked link ${req.mc_username} <-> <@${req.discord_id}>: no longer a member of the Discord server.`);
-        }
-        return { ok: false, reason: `Discord check failed (${m.status})`, playerMessage: 'Your request was cancelled: you are no longer verified in our Discord server.' };
-      }
-      if (!getOnlinePlayer(req.mc_username)) return { ok: false, reason: 'player is offline' };
+      if (m.status === 'unavailable') return { ok: false, retryLater: true };
+      if (m.status !== 'member') return { ok: false, reason: `Discord check failed (${m.status})`, playerMessage: 'Your order was cancelled: you are no longer verified in our Discord server.' };
+      if (!onlinePlayer(req.mc_username)) return { ok: false, reason: 'the player is offline' };
       return { ok: true };
     },
-    deliver: async (req, ctx) => {
-      const result = await kitService.deliver(req, { ...ctx, notify: (msg) => reply(req.mc_username, msg) }, abortController ? abortController.signal : null);
-      if (result && result.outcome === 'delivered') await announceDelivery(req);
-      return result;
+    async deliver(req, ctx) {
+      await delivery.deliver(req, { ...ctx, notify: (msg) => reply(req.mc_username, msg) }, abort?.signal);
+      if (settings.chat.deliveryAnnouncement) await send(clean(fill(settings.chat.deliveryAnnouncement, { player: req.mc_username, kit: req.kit }))).catch(() => {});
     },
-    notify: (req, msg) => (getOnlinePlayer(req.mc_username) ? reply(req.mc_username, msg) : Promise.resolve())
+    notify: (req, msg) => (onlinePlayer(req.mc_username) ? reply(req.mc_username, msg) : Promise.resolve())
   });
 
-  const handleChat = createRequestHandler({
-    db,
-    getSettings,
-    getRuntime: () => runtime,
-    logger,
-    checkMembership,
-    getOnlinePlayer,
-    reply,
-    onQueued: () => queue.poke()
-  });
+  const handleCommand = createCommandHandler({ db, getSettings, getRuntime: () => runtime, logger, checkMembership, reply, onQueued: () => queue.poke() });
 
-  // ---- server login (AuthMe-style) ----------------------------------------
-  function waitForLine(patterns, timeoutMs) {
-    return new Promise((resolve) => {
-      const res = patterns.map((p) => (p ? new RegExp(p, 'i') : null));
-      const timer = setTimeout(() => {
-        chatLineListeners.delete(listener);
-        resolve(null);
-      }, timeoutMs);
-      const listener = (line) => {
-        const idx = res.findIndex((re) => re && re.test(line));
-        if (idx >= 0) {
-          clearTimeout(timer);
-          chatLineListeners.delete(listener);
-          resolve({ index: idx, line });
+  // ---- chat intake -------------------------------------------------------------
+  function onChat({ username, message }, where) {
+    if (!username || username.toLowerCase() === (bot?.username || '').toLowerCase()) return;
+    const player = onlinePlayer(username);
+    if (!player && settings.chat.requireOnlinePlayer) return;
+    handleCommand(player ? player.username : username, message, player || { username, uuid: null }).catch((e) =>
+      logger.error('chat.error', `Error handling "${message.slice(0, 40)}" from ${username} (${where}): ${e.message}`)
+    );
+  }
+
+  function onLine(line, where) {
+    lastChatAt = Date.now();
+    logger.debug('chat.line', `[${where}] ${line}`);
+    for (const fn of [...lineListeners]) {
+      try {
+        fn(line);
+      } catch {
+        // a listener must not break chat handling
+      }
+    }
+  }
+
+  function unreadable(line, where) {
+    if (!chat.mentionsCommand(line, settings.chat) || Date.now() - lastUnreadableAt < 30000) return;
+    lastUnreadableAt = Date.now();
+    logger.warn('chat.unreadable', `A chat line mentions a command, but its sender is not a player in the tab list (${where}): "${chat.cleanText(line).slice(0, 200)}"`);
+  }
+
+  // Reads the raw chat packets (see src/chat.js).
+  function attachChat(b) {
+    let ChatMessage = null;
+    const text = (json) => {
+      if (!ChatMessage && b.registry) {
+        try {
+          ChatMessage = require('prismarine-chat')(b.registry);
+        } catch {
+          ChatMessage = null;
         }
-      };
-      chatLineListeners.add(listener);
+      }
+      return chat.componentText(json, ChatMessage);
+    };
+    const playersByUuid = () => Object.fromEntries(Object.values(b.players || {}).map((p) => [p.uuid, p.username]));
+
+    b._client.on('playerChat', (data) => {
+      try {
+        const senderName = text(data.senderName);
+        if (data.plainMessage !== undefined) {
+          onLine(`${senderName}: ${data.plainMessage}`, 'player chat');
+          const parsed = chat.parsePlayerChat({ senderUuid: data.sender, plainMessage: data.plainMessage, senderName }, { playersByUuid: playersByUuid(), online: onlineNames() });
+          if (parsed) onChat(parsed, 'player chat');
+          else unreadable(data.plainMessage, 'player chat');
+        } else {
+          const message = text(data.formattedMessage);
+          onLine(`${senderName}: ${message}`, 'profileless chat');
+          const parsed = chat.parseProfilelessChat({ senderName, message }, { online: onlineNames() });
+          if (parsed) onChat(parsed, 'profileless chat');
+          else unreadable(message, 'profileless chat');
+        }
+      } catch (e) {
+        logger.warn('chat.error', `Could not read a player chat message: ${e.message}`);
+      }
+    });
+
+    b._client.on('systemChat', (data) => {
+      if (data.positionId === 2) return; // action bar
+      try {
+        const line = text(data.formattedMessage);
+        onLine(line, 'system');
+        if (!runtime.connected || compiled.ignore?.test(chat.cleanText(line))) return; // e.g. relayed from Discord
+        const parsed = chat.parseSystemLine(line, { online: onlineNames(), botName: b.username, ...compiled });
+        if (parsed) onChat(parsed, 'system chat');
+        else unreadable(line, 'system');
+      } catch (e) {
+        logger.warn('chat.error', `Could not read a system message: ${e.message}`);
+      }
     });
   }
 
-  async function authenticate() {
+  // ---- login (AuthMe) -------------------------------------------------------------
+  function waitForLine(patterns, timeoutMs) {
+    const res = patterns.map((p) => new RegExp(p, 'i'));
+    return new Promise((resolve) => {
+      const done = (value) => {
+        clearTimeout(timer);
+        lineListeners.delete(listener);
+        resolve(value);
+      };
+      const listener = (line) => {
+        const index = res.findIndex((re) => re.test(line));
+        if (index >= 0) done({ index, line });
+      };
+      const timer = setTimeout(() => done(null), timeoutMs);
+      lineListeners.add(listener);
+    });
+  }
+
+  async function login() {
     const a = settings.auth;
-    if (!a.enabled) return true;
-    if (!secrets.minecraft.password) throw new Error('auth.enabled is true but MINECRAFT_PASSWORD is not set');
-    const values = { password: secrets.minecraft.password };
-    const registered = await getSetting(db, 'minecraft.registered', false);
-
+    if (!a.enabled) return;
+    if (!secrets.minecraft.password) throw new Error('MINECRAFT_PASSWORD is not set');
+    const key = `minecraft.registered.${secrets.minecraft.username.toLowerCase()}`;
+    const registered = await getSetting(db, key, false);
     const prompt = await waitForLine([a.registerPromptPattern, a.loginPromptPattern], a.promptTimeoutMs);
-    let action;
-    if (prompt) action = new RegExp(a.loginPromptPattern, 'i').test(prompt.line) ? 'login' : 'register';
-    else action = registered ? 'login' : 'register';
-
-    // Specific replies are checked before the generic success pattern.
-    for (let step = 0; step < 3; step++) {
-      const outcome = waitForLine([a.alreadyRegisteredPattern, a.notRegisteredPattern, a.failurePattern, a.successPattern], a.successTimeoutMs);
-      await sendCommand(fill(action === 'register' ? a.registerCommand : a.loginCommand, values));
-      await logger.info('minecraft.auth', `Sent ${action} command to the server.`);
-      const r = await outcome;
+    let action = prompt ? (new RegExp(a.loginPromptPattern, 'i').test(prompt.line) ? 'login' : 'register') : registered ? 'login' : 'register';
+    for (let i = 0; i < 3; i++) {
+      // The specific answers are checked before the generic success one.
+      const answer = waitForLine([a.alreadyRegisteredPattern, a.notRegisteredPattern, a.failurePattern, a.successPattern], a.replyTimeoutMs);
+      await sendCommand(fill(action === 'register' ? a.registerCommand : a.loginCommand, { password: secrets.minecraft.password }));
+      await logger.info('minecraft.login', `Sent the ${action === 'register' ? '/reg' : '/log'} command.`);
+      const r = await answer;
       if (!r) {
-        // Some servers print nothing on success. Treat silence as success only for login.
-        if (action === 'login') return true;
-        await logger.warn('minecraft.auth', 'No reply to the register command; trying to log in.');
+        if (action === 'login') return; // some servers say nothing on success
         action = 'login';
         continue;
       }
       if (r.index === 0) {
-        await setSetting(db, 'minecraft.registered', true);
+        await setSetting(db, key, true);
         action = 'login';
-        continue;
-      }
-      if (r.index === 1) {
-        action = 'register';
-        continue;
-      }
-      if (r.index === 2) throw new Error('the server rejected the login password');
-      if (!registered) await setSetting(db, 'minecraft.registered', true);
-      return true;
-    }
-    return false;
-  }
-
-  // ---- connection lifecycle -------------------------------------------------
-  function scheduleReconnect(reason) {
-    if (stopping || reconnectTimer) return;
-    const delay = Math.min(300000, 5000 * 2 ** Math.min(reconnectAttempt, 6));
-    reconnectAttempt++;
-    logger.warn('minecraft.reconnect', `Reconnecting to Minecraft in ${Math.round(delay / 1000)}s (attempt ${reconnectAttempt}): ${reason}`);
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null;
-      connect();
-    }, delay);
-  }
-
-  function dispatchChat(current, username, message) {
-    if (username.toLowerCase() === current.username.toLowerCase()) return;
-    handleChat(username, message).catch((e) => logger.error('request.error', `Error handling a command from ${username}: ${e.message}`));
-  }
-
-  // Idle behaviour of a normal player: glance around now and then and swing an
-  // arm, so the client is not completely motionless (AFK kicks, bot detection).
-  // The bot always turns back to where it was facing: station detection reads
-  // its yaw, so it must not drift.
-  function startHumanBehaviour(current) {
-    let glancing = false;
-    const timer = setInterval(async () => {
-      if (glancing || detectingStation || bot !== current || !runtime.minecraftReady || queue.current() || !current.entity || current.currentWindow) return;
-      glancing = true;
-      const { yaw, pitch } = current.entity;
-      try {
-        await current.look(yaw + (Math.random() - 0.5) * 0.8, Math.max(-0.4, Math.min(0.4, pitch + (Math.random() - 0.5) * 0.4)));
-        if (Math.random() < 0.3) current.swingArm();
-        await new Promise((r) => setTimeout(r, 800 + Math.random() * 1200));
-        if (bot === current && !queue.current()) await current.look(yaw, pitch);
-      } catch {
-        // disconnected
-      } finally {
-        glancing = false;
-      }
-    }, 20000 + Math.floor(Math.random() * 20000));
-    current.once('end', () => clearInterval(timer));
-  }
-
-  function connect() {
-    if (stopping) return;
-    abortController = new AbortController();
-    const controller = abortController;
-    let spawnedOnce = false;
-    let stableTimer = null;
-
-    bot = mineflayer.createBot({
-      host: secrets.minecraft.host,
-      port: secrets.minecraft.port,
-      username: secrets.minecraft.username,
-      auth: secrets.minecraft.auth,
-      version: secrets.minecraft.version,
-      hideErrors: true,
-      checkTimeoutInterval: 60000,
-      respawn: true
-    });
-    bot.loadPlugin(pathfinder);
-    numberBlockInteractions(bot._client);
-    const current = bot;
-
-    current.once('login', () => {
-      runtime.connected = true;
-      logger.info('minecraft.connected', `Connected to the Minecraft server as ${current.username}.`);
-    });
-
-    current.on('spawn', async () => {
-      if (spawnedOnce) return;
-      spawnedOnce = true;
-      try {
-        const ok = await authenticate();
-        if (!ok) throw new Error('could not complete the server login');
-        await new Promise((r) => setTimeout(r, settings.auth.postLoginDelayMs));
-        for (const cmd of settings.auth.postLoginCommands) await sendCommand(cmd);
-        runtime.minecraftReady = true;
-        lastChatAt = Date.now();
-        chatSilenceWarned = false;
-        await ensureStation();
-        const free = current.inventory.emptySlotCount();
-        if (free < 2) {
-          await logger.warn('inventory.full', `The bot has only ${free} free inventory slot(s), so it cannot take kits out of the chests. Log in as the bot and empty its inventory.`);
-        }
-        await logger.info('minecraft.ready', runtime.stationReady ? 'Logged in and ready to deliver kits.' : 'Logged in, but kit deliveries are disabled until the kit station is found.');
-        stableTimer = setTimeout(() => (reconnectAttempt = 0), 60000);
-        queue.poke();
-      } catch (e) {
-        await logger.error('minecraft.auth', `Login failed: ${e.message}`);
-        current.quit('login failed');
-      }
-    });
-
-    current.on('messagestr', (line, position, msg, sender) => {
-      if (position === 'game_info') return; // action bar
-      lastChatAt = Date.now();
-      logger.debug('chat.line', line); // console only, with logging.consoleLevel = "DEBUG"
-      for (const fn of [...chatLineListeners]) {
-        try {
-          fn(line);
-        } catch {
-          // listener errors must not break chat handling
-        }
-      }
-      if (!runtime.minecraftReady) return;
-      // Signed player chat carries the sender's UUID: use it when the player is known,
-      // whatever the server's chat format looks like.
-      const signerName = position === 'chat' && sender ? (current.uuidToUsername && current.uuidToUsername[sender]) || Object.values(current.players).find((p) => p.uuid === sender)?.username : null;
-      const signer = signerName ? { username: signerName } : null;
-      const parsed =
-        (signer && parseSignedChat(line, signer.username)) ||
-        parseChatLine(line, chatPatterns) ||
-        (mentionsCommand(line) ? parseLooseCommand(line, settings.chat, Object.keys(current.players)) : null);
-      if (!parsed) {
-        // A command we could not attribute to a player: show the raw line so the chat patterns can be fixed.
-        if (mentionsCommand(line) && Date.now() - lastUnreadableAt > 30000) {
-          lastUnreadableAt = Date.now();
-          logger.warn('chat.unreadable', `Saw a command in the chat but could not tell who sent it (chat type: ${position}). Line: "${line.slice(0, 200)}"`);
-        }
+      } else if (r.index === 1) action = 'register';
+      else if (r.index === 2) throw new Error('the server refused the password (MINECRAFT_PASSWORD)');
+      else {
+        await setSetting(db, key, true);
         return;
       }
-      dispatchChat(current, parsed.username, parsed.message);
-    });
-
-    // Mineflayer's own 'chat' / 'whisper' events are not used: their patterns are
-    // loose ("[Mallory] Alice whispers: !kit" is credited to Alice), so a player
-    // could request kits in someone else's name.
-
-    startHumanBehaviour(current);
-
-    current.on('death', () => {
-      if (kitService.isReturning()) logger.debug('minecraft.death', 'Respawning to return to base.');
-      else logger.warn('minecraft.death', 'The bot died.');
-      // Mineflayer respawns by itself; make sure it did, or the bot stays on the death screen.
-      setTimeout(() => {
-        if (bot === current && !current.isAlive) {
-          logger.warn('minecraft.death', 'The bot is still dead after 5s; asking the server to respawn it.');
-          try {
-            current.respawn();
-          } catch {
-            // disconnected
-          }
-        }
-      }, 5000);
-    });
-
-    current.on('kicked', (reason) => {
-      const text = typeof reason === 'string' ? reason : JSON.stringify(reason);
-      logger.warn('minecraft.kicked', `Kicked from the server: ${text.slice(0, 300)}`);
-      if (new RegExp(settings.server.stopOnKickPattern, 'i').test(text)) {
-        stopping = true;
-        logger.error('minecraft.stopped', 'The kick message indicates bots are not allowed or the account is banned. Not reconnecting; check the server rules.');
-      }
-    });
-
-    current.on('error', (err) => logger.error('minecraft.error', `Minecraft connection error: ${err.message}`));
-
-    current.on('end', (reason) => {
-      clearTimeout(stableTimer);
-      controller.abort();
-      runtime.connected = false;
-      runtime.minecraftReady = false;
-      if (bot === current) bot = null;
-      logger.warn('minecraft.disconnected', `Disconnected from Minecraft: ${reason || 'unknown reason'}`);
-      scheduleReconnect(reason || 'connection ended');
-    });
+    }
+    throw new Error('could not log in after 3 tries');
   }
 
-  // Public chat line after a confirmed delivery; never affects the delivery itself.
-  async function announceDelivery(req) {
-    const text = deliveryAnnouncement(settings.chat.deliveryAnnouncement, req);
-    if (!text) return;
-    try {
-      await sendRaw(sanitizeOutgoing(text, MC_MAX_CHAT));
-    } catch {
-      // disconnected: skip the announcement
-    }
-  }
-
-  // Messages queued from Discord with /kitbot say. Old ones (bot offline for
-  // a while) are dropped instead of being flooded into the chat later.
-  async function flushChatOutbox() {
-    if (!runtime.minecraftReady) return;
-    const now = Date.now();
-    await db.run("UPDATE chat_outbox SET sent_at = ?, error = 'expired' WHERE sent_at IS NULL AND created_at < ?", [now, now - 10 * 60000]);
-    const rows = await db.all('SELECT * FROM chat_outbox WHERE sent_at IS NULL ORDER BY id LIMIT 5');
-    for (const row of rows) {
-      const text = sanitizeOutgoing(row.message, MC_MAX_CHAT);
-      if (!text || text.startsWith('/')) {
-        await db.run("UPDATE chat_outbox SET sent_at = ?, error = 'refused' WHERE id = ?", [Date.now(), row.id]);
-        continue;
-      }
-      try {
-        await sendRaw(text);
-        await db.run('UPDATE chat_outbox SET sent_at = ? WHERE id = ?', [Date.now(), row.id]);
-        await logger.info('chat.sent', `Sent to the Minecraft chat (requested by <@${row.requested_by}>): ${text}`);
-      } catch {
-        return; // disconnected: retry on the next refresh
+  // ---- kit station -------------------------------------------------------------
+  async function findStation({ force = false } = {}) {
+    const nav = settings.navigation;
+    const account = secrets.minecraft.username.toLowerCase();
+    if (!force) {
+      const saved = await getSetting(db, 'station', null);
+      // A station found by another account is not reused (it may stand elsewhere).
+      if (saved && saved.kits && saved.account === account && (!nav.home || sameBlock(saved.home, nav.home))) {
+        station = saved;
+        runtime.stationReady = true;
+        return;
       }
     }
+    const b = bot;
+    if (!b || !runtime.ready) return;
+    lastStationTry = Date.now();
+    await settle(b);
+    const origin = nav.home || b.entity.position;
+    const result = detectStation({
+      position: origin,
+      yaw: b.entity.yaw,
+      facing: nav.home ? nav.home.facing : null,
+      blockAt: (p) => b.blockAt(new Vec3(p.x, p.y, p.z)),
+      kits: settings.kits,
+      scanDistance: nav.scanDistance
+    });
+    if (!result.ok) {
+      runtime.stationReady = false;
+      const msg = result.ambiguous
+        ? 'The kit chests fit more than one orientation. Keep the side behind the bot free of chests, barrels and shulker boxes, then run /kitbot recalibrate.'
+        : `Kit chests not found (${result.missing.join(', ')}). Log in as ${secrets.minecraft.username}, stand on the bot's block with the TOTEM chest on your left, PVP on your right and GRIEF in front (within ${nav.scanDistance} blocks), log out there, then run /kitbot recalibrate. The bot also retries by itself every 2 minutes.`;
+      if (msg !== lastStationError) await logger.error('station.missing', msg);
+      lastStationError = msg;
+      return;
+    }
+    // Explicit coordinates in the settings win over detected ones.
+    for (const [name, k] of Object.entries(result.kits)) {
+      if (settings.kits[name].container) k.container = settings.kits[name].container;
+      if (settings.kits[name].standAt) k.standAt = settings.kits[name].standAt;
+    }
+    station = { account, home: result.home, kits: result.kits, detectedAt: Date.now() };
+    await setSetting(db, 'station', station);
+    runtime.stationReady = true;
+    lastStationError = null;
+    // Coordinates stay out of the console: Actions logs can be public.
+    await logger.info('station.found', `Kit chests found (${describeStation(station, settings.kits)})${result.turned ? '; the orientation was worked out from the chests' : ''}.`);
+    queue.poke();
   }
 
-  // ---- shared state refresh (pause / maintenance / reload from Discord) ----
-  async function refreshRuntime() {
-    await flushChatOutbox();
-    const recalibrateAt = await getSetting(db, 'station_recalibrate_at', null);
-    if (lastRecalibrateAt === null) lastRecalibrateAt = recalibrateAt;
-    else if (recalibrateAt !== lastRecalibrateAt && runtime.minecraftReady && !queue.current()) {
-      lastRecalibrateAt = recalibrateAt;
-      await logger.admin('station.recalibrate', 'Re-detecting the kit station from the bot position.');
-      await ensureStation({ force: true });
-    }
-    // Retry every 2 minutes while the station is missing (e.g. chests being placed).
-    if (!runtime.stationReady && runtime.minecraftReady && !queue.current() && Date.now() - lastStationAttempt > 120000) {
-      await ensureStation({ force: true });
-    }
-    runtime.paused = !!(await getSetting(db, 'paused', false));
-    runtime.maintenance = !!(await getSetting(db, 'maintenance', false));
-    const reloadAt = await getSetting(db, 'reload_requested_at', null);
-    if (lastReloadAt === null) lastReloadAt = reloadAt;
-    else if (reloadAt !== lastReloadAt) {
-      lastReloadAt = reloadAt;
-      try {
-        const { settings: next, errors } = loadSettings();
-        if (errors.length) throw new Error(errors.join('; '));
-        baseSettings = next;
-        settings = station ? applyStation(next, station) : next;
-        chatPatterns = compilePatterns(settings.chat.patterns);
-        onSettingsReloaded(settings);
-        await logger.admin('config.reloaded', 'Minecraft bot reloaded its settings.');
-      } catch (e) {
-        await logger.error('config.reload_failed', `Settings reload failed, keeping the previous settings: ${e.message}`);
-      }
-    }
-  }
+  const sameBlock = (a, b) => a && b && Math.floor(a.x) === Math.floor(b.x) && Math.floor(a.y) === Math.floor(b.y) && Math.floor(a.z) === Math.floor(b.z);
 
-  // ---- kit station ------------------------------------------------------------
-  async function waitUntilSettled(b) {
+  async function settle(b) {
     await Promise.race([b.waitForChunksToLoad().catch(() => {}), new Promise((r) => setTimeout(r, 15000))]);
-    // Wait until the server has finished moving the bot (login teleports).
     let last = b.entity.position.clone();
     for (let i = 0; i < 10; i++) {
       await new Promise((r) => setTimeout(r, 500));
@@ -475,89 +318,190 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
     }
   }
 
-  async function ensureStation({ force = false } = {}) {
-    if (settings.navigation.home && !station) {
-      runtime.stationReady = true; // configured explicitly
-      return;
-    }
-    if (!settings.navigation.autoDetect) return;
-    if (!force) {
-      const stored = await getSetting(db, 'station', null);
-      if (stored) {
-        station = stored;
-        settings = applyStation(settings, station);
-        runtime.stationReady = true;
+  // ---- idle behaviour of a player ----------------------------------------------------
+  // Glances around now and then and turns back, so the bot is not frozen
+  // (AFK kicks). Never during a delivery or while detecting the station.
+  function idle(b) {
+    let busy = false;
+    const timer = setInterval(async () => {
+      if (busy || bot !== b || !runtime.ready || queue.current() || b.currentWindow || !b.entity || Date.now() - lastStationTry < 20000) return;
+      busy = true;
+      const { yaw, pitch } = b.entity;
+      try {
+        await b.look(yaw + (Math.random() - 0.5) * 0.8, Math.max(-0.4, Math.min(0.4, pitch + (Math.random() - 0.5) * 0.4)));
+        if (Math.random() < 0.3) b.swingArm();
+        await new Promise((r) => setTimeout(r, 800 + Math.random() * 1200));
+        if (bot === b && !queue.current()) await b.look(yaw, pitch);
+      } catch {
+        // disconnected
+      } finally {
+        busy = false;
+      }
+    }, 20000 + Math.floor(Math.random() * 20000));
+    b.once('end', () => clearInterval(timer));
+  }
+
+  // ---- connection --------------------------------------------------------------------
+  function scheduleReconnect(reason) {
+    if (stopping || reconnectTimer) return;
+    const delay = Math.min(300000, 5000 * 2 ** Math.min(reconnectAttempt, 6));
+    reconnectAttempt++;
+    logger.warn('minecraft.reconnect', `Reconnecting in ${Math.round(delay / 1000)}s (attempt ${reconnectAttempt}): ${reason}`);
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      connect();
+    }, delay);
+  }
+
+  function connect() {
+    if (stopping) return;
+    abort = new AbortController();
+    const controller = abort;
+    const b = mineflayer.createBot({
+      host: secrets.minecraft.host,
+      port: secrets.minecraft.port,
+      username: secrets.minecraft.username,
+      auth: secrets.minecraft.auth,
+      version: secrets.minecraft.version || false,
+      hideErrors: true,
+      checkTimeoutInterval: 60000,
+      respawn: true
+    });
+    bot = b;
+    b.loadPlugin(pathfinder);
+    numberBlockInteractions(b._client);
+    attachChat(b);
+    let spawned = false;
+    let stableTimer = null;
+
+    b.once('login', () => {
+      runtime.connected = true;
+      logger.info('minecraft.connected', `Connected to ${secrets.minecraft.host} as ${b.username}.`);
+    });
+
+    b.once('spawn', async () => {
+      spawned = true;
+      try {
+        await login();
+        await new Promise((r) => setTimeout(r, settings.auth.postLoginDelayMs));
+        for (const cmd of settings.auth.postLoginCommands) await sendCommand(cmd);
+        runtime.ready = true;
+        lastChatAt = Date.now();
+        silenceWarned = false;
+        await findStation();
+        if (b.inventory.emptySlotCount() < 2) await logger.warn('inventory.full', `The bot inventory is almost full (${b.inventory.emptySlotCount()} free slots): log in as ${b.username} and empty it.`);
+        await logger.info('minecraft.ready', runtime.stationReady ? 'Logged in. Reading the chat for !kit and ready to deliver.' : 'Logged in and reading the chat, but deliveries wait until the kit chests are found.');
+        stableTimer = setTimeout(() => (reconnectAttempt = 0), 60000);
+        idle(b);
+        queue.poke();
+      } catch (e) {
+        await logger.error('minecraft.login', `Login failed: ${e.message}`);
+        b.quit('login failed');
+      }
+    });
+
+    b.on('death', () => {
+      if (!delivery.isReturning() && spawned) logger.warn('minecraft.death', 'The bot died.');
+      setTimeout(() => {
+        if (bot === b && !b.isAlive) {
+          try {
+            b.respawn();
+          } catch {
+            // disconnected
+          }
+        }
+      }, 5000);
+    });
+
+    b.on('kicked', (reason) => {
+      const text = chat.cleanText(chat.componentText(typeof reason === 'string' ? reason : JSON.stringify(reason)));
+      logger.warn('minecraft.kicked', `Kicked: ${text.slice(0, 300)}`);
+      if (new RegExp(settings.server.stopOnKickPattern, 'i').test(text)) {
+        stopping = true;
+        logger.error('minecraft.stopped', 'The kick says bots are not allowed or the account is banned: not reconnecting.');
+      }
+    });
+
+    b.on('error', (e) => logger.error('minecraft.error', `Connection error: ${e.message}`));
+
+    b.on('end', (reason) => {
+      clearTimeout(stableTimer);
+      controller.abort();
+      runtime.connected = false;
+      runtime.ready = false;
+      if (bot === b) bot = null;
+      logger.warn('minecraft.disconnected', `Disconnected: ${reason || 'unknown reason'}`);
+      scheduleReconnect(reason || 'connection ended');
+    });
+  }
+
+  // ---- shared state (pause, maintenance, reload, /kitbot say) ---------------------------------
+  async function flushOutbox() {
+    if (!runtime.ready) return;
+    const now = Date.now();
+    await db.run("UPDATE chat_outbox SET sent_at = ?, error = 'expired' WHERE sent_at IS NULL AND created_at < ?", [now, now - 600000]);
+    for (const row of await db.all('SELECT * FROM chat_outbox WHERE sent_at IS NULL ORDER BY id LIMIT 5')) {
+      const text = clean(row.message);
+      if (!text || text.startsWith('/')) {
+        await db.run("UPDATE chat_outbox SET sent_at = ?, error = 'refused' WHERE id = ?", [Date.now(), row.id]);
+        continue;
+      }
+      try {
+        await send(text);
+      } catch {
         return;
       }
+      await db.run('UPDATE chat_outbox SET sent_at = ? WHERE id = ?', [Date.now(), row.id]);
+      await logger.info('chat.sent', `Said in the Minecraft chat (for <@${row.requested_by}>): ${text}`);
     }
-    const b = bot;
-    if (!b || !runtime.minecraftReady) return;
-    lastStationAttempt = Date.now();
-    detectingStation = true;
-    let result;
-    try {
-      await waitUntilSettled(b);
-      result = detectStation({
-        position: b.entity.position,
-        yaw: b.entity.yaw,
-        blockAt: (p) => b.blockAt(new Vec3(p.x, p.y, p.z)),
-        kits: settings.kits,
-        scanDistance: settings.navigation.scanDistance
-      });
-    } finally {
-      detectingStation = false;
+  }
+
+  async function refresh() {
+    await flushOutbox();
+    runtime.paused = !!(await getSetting(db, 'paused', false));
+    runtime.maintenance = !!(await getSetting(db, 'maintenance', false));
+    const recalibrate = await getSetting(db, 'station_recalibrate_at', null);
+    if (lastRecalibrate === null) lastRecalibrate = recalibrate;
+    else if (recalibrate !== lastRecalibrate && runtime.ready && !queue.current()) {
+      lastRecalibrate = recalibrate;
+      await logger.admin('station.recalibrate', 'Looking for the kit chests again from where the bot stands.');
+      await findStation({ force: true });
     }
-    if (!result.ok) {
-      runtime.stationReady = false;
-      const msg = result.ambiguous
-        ? 'Kit station is ambiguous: the chests around the bot match more than one orientation. Keep the side behind the bot (opposite the grief chest) free of chests, barrels and shulker boxes, then run /kitbot recalibrate.'
-        : `Kit station not found: no chest for ${result.missing.join(', ')}. Seen from the bot's spot, the totem chest must be on its left, the pvp chest on its right and the grief chest in front, each in a straight line within ${settings.navigation.scanDistance} blocks, with no chest, barrel or shulker box behind it. Then run /kitbot recalibrate (it also retries by itself every 2 minutes).`;
-      if (msg !== lastStationError) await logger.error('station.missing', msg);
-      lastStationError = msg;
-      return;
+    if (!runtime.stationReady && runtime.ready && !queue.current() && Date.now() - lastStationTry > 120000) await findStation({ force: true });
+    const reload = await getSetting(db, 'reload_requested_at', null);
+    if (lastReload === null) lastReload = reload;
+    else if (reload !== lastReload) {
+      lastReload = reload;
+      const next = loadSettings();
+      if (next.errors.length) await logger.error('config.reload', `Reload refused: ${next.errors.join('; ')}`);
+      else {
+        settings = next.settings;
+        compiled = compile(settings);
+        await logger.admin('config.reload', 'The Minecraft bot reloaded its settings.');
+      }
     }
-    // Detection starts from the configured settings, not from an older station.
-    station = { home: result.home, kits: result.kits, detectedAt: Date.now() };
-    settings = applyStation(baseSettings, station);
-    await setSetting(db, 'station', station);
-    runtime.stationReady = true;
-    lastStationError = null;
-    // Coordinates are kept out of the logs: GitHub Actions logs may be readable by others.
-    await logger.info('station.detected', `Kit station detected (${describeStation(station)})${result.facingCorrected ? '; the bot was not facing that way, so its orientation was worked out from the chests' : ''}.`);
-    queue.poke();
   }
 
   async function heartbeat() {
-    // No chat at all for 5 minutes: the server is not sending the chat to the bot
-    // (e.g. still in a lobby or queue), so it cannot see any command.
-    if (runtime.minecraftReady && !chatSilenceWarned && Date.now() - lastChatAt > 5 * 60000) {
-      chatSilenceWarned = true;
-      await logger.warn('chat.silent', 'The bot has not received any chat message for 5 minutes, so it cannot see !kit. Check in game that it is really on the server (not in a lobby or queue) and that the chat is visible to it.');
-    } else if (chatSilenceWarned && Date.now() - lastChatAt < 60000) {
-      chatSilenceWarned = false;
-      await logger.info('chat.silent', 'The bot receives the chat again.');
-    }
+    if (runtime.ready && !silenceWarned && Date.now() - lastChatAt > 15 * 60000) {
+      silenceWarned = true;
+      await logger.warn('chat.silent', 'No chat message at all for 15 minutes. Check in game that the bot is really in the world (not stuck in a lobby or queue).');
+    } else if (silenceWarned && Date.now() - lastChatAt < 60000) silenceWarned = false;
     const cur = queue.current();
     await setStatus(db, 'minecraft', {
-      connected: runtime.connected,
-      ready: runtime.minecraftReady,
+      ...runtime,
       username: bot ? bot.username : secrets.minecraft.username,
-      paused: runtime.paused,
-      maintenance: runtime.maintenance,
-      stationReady: runtime.stationReady,
+      online: onlineNames().length,
       currentRequest: cur ? { id: cur.id, kit: cur.kit, player: cur.mc_username } : null,
       reconnectAttempt
     });
   }
 
   async function start() {
-    if (!settings.server.botsAllowedConfirmed) {
-      throw new Error('server.botsAllowedConfirmed is false. Read the server rules and confirm that automated bots are allowed before enabling the Minecraft bot.');
-    }
     await recoverInterrupted(db, { maxAttempts: settings.limits.maxAttempts, logger });
-    await refreshRuntime();
-    intervals.push(setInterval(() => refreshRuntime().catch((e) => logger.error('runtime.refresh', e.message)), 3000));
-    intervals.push(setInterval(() => heartbeat().catch(() => {}), 10000));
+    await refresh();
+    timers.push(setInterval(() => refresh().catch((e) => logger.error('runtime.refresh', e.message)), 3000));
+    timers.push(setInterval(() => heartbeat().catch(() => {}), 10000));
     queue.start();
     connect();
     await heartbeat();
@@ -566,26 +510,36 @@ function createMinecraftBot({ config, db, logger, checkMembership, onSettingsRel
   async function stop() {
     stopping = true;
     clearTimeout(reconnectTimer);
-    intervals.forEach(clearInterval);
-    // Let a delivery in progress finish (up to 45s), then abort it.
+    timers.forEach(clearInterval);
     const stopped = queue.stop();
-    const timedOut = await Promise.race([stopped.then(() => false), new Promise((r) => setTimeout(() => r(true), 45000))]);
-    if (timedOut && abortController) abortController.abort();
-    await Promise.race([stopped, new Promise((r) => setTimeout(r, 10000))]);
-    runtime.minecraftReady = false;
+    const later = (ms, value) => {
+      let t;
+      const p = new Promise((r) => (t = setTimeout(() => r(value), ms)));
+      return { p, cancel: () => clearTimeout(t) };
+    };
+    // Let a delivery in progress finish (up to 45s), then abort it.
+    const grace = later(45000, true);
+    if (await Promise.race([stopped.then(() => false), grace.p])) abort?.abort();
+    grace.cancel();
+    const last = later(10000);
+    await Promise.race([stopped, last.p]);
+    last.cancel();
+    runtime.ready = false;
     if (bot) {
       const b = bot;
       await new Promise((resolve) => {
         b.once('end', resolve);
-        b.quit('shutting down');
-        setTimeout(resolve, 5000);
+        // quit() exists only once Mineflayer has loaded its plugins.
+        if (typeof b.quit === 'function') b.quit('shutting down');
+        else b.end('shutting down');
+        setTimeout(resolve, 5000).unref();
       });
     }
     await setStatus(db, 'minecraft', { connected: false, ready: false, stoppedAt: Date.now() }).catch(() => {});
-    await logger.info('minecraft.shutdown', 'Minecraft bot stopped.');
+    await logger.info('minecraft.stopped', 'Minecraft bot stopped.');
   }
 
-  return { start, stop, runtime, queue, getSettings };
+  return { start, stop, runtime, queue, getSettings, getBot: () => bot };
 }
 
-module.exports = { createMinecraftBot, sanitizeOutgoing, fill, deliveryAnnouncement };
+module.exports = { createMinecraftBot, fill, clean };

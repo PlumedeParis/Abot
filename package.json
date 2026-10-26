@@ -1,8 +1,8 @@
 {
-  "name": "anarchy-kitbot",
+  "name": "voidkits",
   "version": "1.0.0",
   "private": true,
-  "description": "Minecraft Java 1.21.11 kit bot (Mineflayer) with Discord account linking and admin commands (discord.js).",
+  "description": "VoidKits: Minecraft kit bot (Mineflayer) for 1b1t.cc with Discord account linking and admin commands (discord.js).",
   "license": "MIT",
   "main": "src/index.js",
   "engines": {
@@ -16,7 +16,7 @@
     "test": "node --test --test-concurrency=1 \"test/*.test.js\"",
     "check": "node scripts/check-syntax.js",
     "validate-config": "node scripts/validate-config.js",
-    "validate-config:example": "node scripts/validate-config.js config.example.json --allow-placeholders"
+    "validate-config:example": "node scripts/validate-config.js config.example.json"
   },
   "dependencies": {
     "better-sqlite3": "13.0.3",
@@ -25,6 +25,7 @@
     "mineflayer": "4.39.0",
     "mineflayer-pathfinder": "2.4.5",
     "pg": "8.23.0",
+    "prismarine-chat": "1.13.0",
     "vec3": "0.1.10"
   },
   "devDependencies": {
