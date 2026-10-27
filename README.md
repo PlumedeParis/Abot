@@ -106,6 +106,7 @@ Environment variables (GitHub secrets): `DISCORD_TOKEN` (required), `MINECRAFT_H
 
 ## Running elsewhere
 
+- **Pterodactyl panels (e.g. bot-hosting.net):** a Node.js 22+ server. Upload and unzip the files at the root, create a `.env` file with the variables above, and start it: the panel runs `index.js`. Nothing needs compiling: the database is the SQLite built into Node.js.
 - **Docker:** `cp .env.example .env` (fill it in), then `docker compose up -d --build`. This uses PostgreSQL.
 - **VPS:** `npm ci --omit=dev`, then `node src/index.js` (systemd unit in `deploy/kitbot.service`).
 - **Separate processes:** `node src/index.js minecraft` and `node src/index.js discord`, sharing one database.

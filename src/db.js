@@ -1,6 +1,6 @@
 'use strict';
 
-// Storage shared by the Minecraft and Discord bots: SQLite by default,
+// Storage shared by the Minecraft and Discord bots: SQLite (built into Node.js) by default,
 // PostgreSQL when DATABASE_URL is set. SQL uses "?" placeholders and the
 // subset both understand.
 //   db.all(sql, params) -> rows     db.get(sql, params) -> row | undefined
@@ -63,14 +63,15 @@ const numberRow = (row) => {
   return row;
 };
 
-// better-sqlite3 is synchronous; a queue keeps an async transaction from
+// SQLite built into Node.js (node:sqlite): nothing to compile, so it works on
+// any host. It is synchronous; a queue keeps an async transaction from
 // interleaving with other statements.
 function createSqlite(file) {
-  const Database = require('better-sqlite3');
+  const { DatabaseSync } = require('node:sqlite');
   if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
-  const conn = new Database(file);
-  conn.pragma('journal_mode = WAL');
-  conn.pragma('busy_timeout = 5000');
+  const conn = new DatabaseSync(file);
+  if (file !== ':memory:') conn.exec('PRAGMA journal_mode = WAL');
+  conn.exec('PRAGMA busy_timeout = 5000');
   const statements = new Map();
   let tail = Promise.resolve();
   const serial = (fn) => {
@@ -78,11 +79,16 @@ function createSqlite(file) {
     tail = run.catch(() => {});
     return run;
   };
+  const returnsRows = (stmt, sql) => (typeof stmt.columns === 'function' ? stmt.columns().length > 0 : /^\s*(select|pragma|with)\b|\breturning\b/i.test(sql));
   const exec = (sql, params) => {
-    let stmt = statements.get(sql);
-    if (!stmt) statements.set(sql, (stmt = conn.prepare(sql)));
-    if (stmt.reader) return { rows: stmt.all(...cleanParams(params)).map(numberRow), changes: 0 };
-    return { rows: [], changes: stmt.run(...cleanParams(params)).changes };
+    let entry = statements.get(sql);
+    if (!entry) {
+      const stmt = conn.prepare(sql);
+      statements.set(sql, (entry = { stmt, reader: returnsRows(stmt, sql) }));
+    }
+    const p = cleanParams(params);
+    if (entry.reader) return { rows: entry.stmt.all(...p).map((r) => numberRow({ ...r })), changes: 0 };
+    return { rows: [], changes: Number(entry.stmt.run(...p).changes) };
   };
   const direct = {
     all: async (sql, params) => exec(sql, params).rows,
@@ -102,7 +108,13 @@ function createSqlite(file) {
           conn.exec('COMMIT');
           return result;
         } catch (e) {
-          if (conn.inTransaction) conn.exec('ROLLBACK');
+          if (conn.isTransaction !== false) {
+            try {
+              conn.exec('ROLLBACK');
+            } catch {
+              // no transaction left to roll back
+            }
+          }
           throw e;
         }
       }),
