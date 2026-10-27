@@ -1,0 +1,9 @@
+{
+  "name": "minecraft-data",
+  "version": "3.117.0",
+  "description": "Provide easy access to minecraft data in node.js (Java Edition 1.21-1.21.11 only, for VoidKits)",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "license": "MIT",
+  "dependencies": {}
+}

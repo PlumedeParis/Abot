@@ -16,11 +16,12 @@
     "test": "node --test --test-concurrency=1 \"test/*.test.js\"",
     "check": "node scripts/check-syntax.js",
     "validate-config": "node scripts/validate-config.js",
-    "validate-config:example": "node scripts/validate-config.js config.example.json"
+    "validate-config:example": "node scripts/validate-config.js config.example.json",
+    "vendor:minecraft-data": "node scripts/vendor-minecraft-data.js"
   },
   "dependencies": {
     "discord.js": "14.27.0",
-    "minecraft-data": "3.117.0",
+    "minecraft-data": "file:vendor/minecraft-data",
     "mineflayer": "4.39.0",
     "mineflayer-pathfinder": "2.4.5",
     "pg": "8.23.0",
@@ -31,5 +32,8 @@
     "@electric-sql/pglite": "0.5.8",
     "minecraft-protocol": "1.68.0",
     "prismarine-nbt": "2.8.0"
+  },
+  "overrides": {
+    "minecraft-data": "$minecraft-data"
   }
 }

@@ -114,7 +114,7 @@ Environment variables (GitHub secrets): `DISCORD_TOKEN` (required), `MINECRAFT_H
 ## Development
 
 ```
-npm ci
+npm ci --include=dev   # test packages are skipped by default (.npmrc)
 npm test          # chat detection, linking, limits, queue, delivery, real-protocol test
 npm run check     # syntax
 ```

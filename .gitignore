@@ -3,7 +3,7 @@ node_modules/
 .env.*
 !.env.example
 config.json
-data/
+/data/
 logs/
 *.db
 *.db-wal
