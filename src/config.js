@@ -48,6 +48,12 @@ const DEFAULTS = {
     maxLength: 240,
     // Public line after each confirmed delivery ("" turns it off).
     deliveryAnnouncement: '{player} just got a {kit} kit from VoidKits! Get yours: !kit totem / pvp / grief',
+    // Public message every intervalMinutes ("" turns it off).
+    advertisement: { message: 'order a kit by typing !kit totem/pvp/grief', intervalMinutes: 30 },
+    // Private message (chat.replyCommand) to each player who joins the server,
+    // at most once every cooldownHours per player ("" turns it off). Players
+    // already online when the bot logs in (its first joinGraceSeconds) are not "joining".
+    welcome: { message: 'order a free kit by doing !kit totem/pvp/grief', cooldownHours: 6, joinGraceSeconds: 15 },
     perPlayerCommandIntervalMs: 3000,
     // Commands are only accepted from players who are in the tab list.
     requireOnlinePlayer: true,
@@ -159,6 +165,10 @@ function validateSettings(s) {
   for (const [k, v] of Object.entries(s.limits)) positive(`limits.${k}`, v);
   for (const k of ['maxLinksPerDiscord', 'codeTtlMinutes', 'usernameChangeCooldownDays', 'maxFailedCodeAttemptsPerHour']) positive(`linking.${k}`, s.linking[k]);
   positive('chat.maxLength', s.chat.maxLength);
+  if (!isObject(s.chat.advertisement) || typeof s.chat.advertisement.message !== 'string') errors.push('chat.advertisement must be { "message", "intervalMinutes" }');
+  else if (s.chat.advertisement.message) positive('chat.advertisement.intervalMinutes', s.chat.advertisement.intervalMinutes);
+  if (!isObject(s.chat.welcome) || typeof s.chat.welcome.message !== 'string') errors.push('chat.welcome must be { "message", "cooldownHours" }');
+  else if (!isNum(s.chat.welcome.cooldownHours) || s.chat.welcome.cooldownHours < 0) errors.push('chat.welcome.cooldownHours must be 0 or more');
   for (const k of ['kitCommand', 'linkCommand']) if (!/^![a-z]{1,16}$/i.test(s.chat[k])) errors.push(`chat.${k} must look like "!kit"`);
   if (!s.chat.replyCommand.includes('{player}') || !s.chat.replyCommand.includes('{message}')) errors.push('chat.replyCommand must contain {player} and {message}');
   if (s.chat.ignorePattern) regex('chat.ignorePattern', s.chat.ignorePattern);

@@ -82,6 +82,8 @@ Everything has a default. To change something, put the changed part in a reposit
 |---|---|---|
 | `chat.replyCommand` | `/msg {player} {message}` | How the bot answers players |
 | `chat.deliveryAnnouncement` | public line after each delivery | `""` turns it off |
+| `chat.advertisement` | `order a kit by typing !kit totem/pvp/grief` every 30 minutes | Public message (`message`, `intervalMinutes`); `""` turns it off |
+| `chat.welcome` | `/msg <player> order a free kit by doing !kit totem/pvp/grief` | Private message to each player who joins, at most once every `cooldownHours` (6) per player; `""` turns it off |
 | `chat.ignorePattern` | lines starting with `[...discord...]` | Lines that are never commands |
 | `chat.patterns` | `[]` | Extra chat formats: regexes with `(?<username>...)` and `(?<message>...)`, starting with `^` |
 | `limits.*` | see Rules | Cooldown, quota, queue size, global rate |
