@@ -49,6 +49,8 @@ const DEFAULTS = {
     // Public line after each confirmed delivery ("" turns it off).
     deliveryAnnouncement: '{player} just got a {kit} kit from VoidKits! Get yours: !kit totem / pvp / grief',
     // Public message every intervalMinutes ("" turns it off).
+    // Invite to the Discord server, sent to players who have not linked their account yet.
+    discordInvite: 'https://discord.gg/VTX6khDexE',
     advertisement: { message: 'order a kit by typing !kit totem/pvp/grief', intervalMinutes: 30 },
     // Private message (chat.replyCommand) to each player who joins the server,
     // at most once every cooldownHours per player ("" turns it off). Players
@@ -165,6 +167,7 @@ function validateSettings(s) {
   for (const [k, v] of Object.entries(s.limits)) positive(`limits.${k}`, v);
   for (const k of ['maxLinksPerDiscord', 'codeTtlMinutes', 'usernameChangeCooldownDays', 'maxFailedCodeAttemptsPerHour']) positive(`linking.${k}`, s.linking[k]);
   positive('chat.maxLength', s.chat.maxLength);
+  if (typeof s.chat.discordInvite !== 'string') errors.push('chat.discordInvite must be a link (or "")');
   if (!isObject(s.chat.advertisement) || typeof s.chat.advertisement.message !== 'string') errors.push('chat.advertisement must be { "message", "intervalMinutes" }');
   else if (s.chat.advertisement.message) positive('chat.advertisement.intervalMinutes', s.chat.advertisement.intervalMinutes);
   if (!isObject(s.chat.welcome) || typeof s.chat.welcome.message !== 'string') errors.push('chat.welcome must be { "message", "cooldownHours" }');
