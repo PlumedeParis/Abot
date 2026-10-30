@@ -2,7 +2,7 @@
 
 // Configuration.
 //   Secrets (passwords, tokens, database URL) come only from environment
-//   variables: GitHub Secrets on Actions, or a local .env file.
+//   variables, usually from the .env file next to package.json.
 //   Settings (kits, limits, chat, delivery) are built-in defaults, optionally
 //   overridden by config.json or by the KITBOT_CONFIG_JSON variable.
 
@@ -17,7 +17,7 @@ const FACINGS = { south: 0, west: 90, north: 180, east: -90 };
 
 const DEFAULTS = {
   server: {
-    // Set to true by the workflow checkbox (KITBOT_BOTS_ALLOWED=true).
+    // Set to true with KITBOT_BOTS_ALLOWED=true once the server rules allow bots.
     botsAllowedConfirmed: false,
     version: '1.21.11',
     // A kick matching this stops the bot for good instead of reconnecting.
@@ -291,7 +291,7 @@ function loadConfig({ env = process.env, role = 'all' } = {}) {
   if (!secrets.minecraft.version) secrets.minecraft.version = settings.server.version;
   const all = [...errors, ...validateSecrets(secrets, role)];
   if (role !== 'discord' && !settings.server.botsAllowedConfirmed) {
-    all.push('The server rules must allow bots: tick the box when you start the workflow (or set KITBOT_BOTS_ALLOWED=true)');
+    all.push('The server rules must allow bots: set KITBOT_BOTS_ALLOWED=true once you have checked them');
   }
   if (all.length) throw Object.assign(new Error(`Invalid configuration:\n - ${all.join('\n - ')}`), { errors: all });
   return { settings, secrets, source, role };

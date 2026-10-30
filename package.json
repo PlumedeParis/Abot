@@ -12,7 +12,6 @@
     "start": "node src/index.js",
     "start:minecraft": "node src/index.js minecraft",
     "start:discord": "node src/index.js discord",
-    "supervise": "node scripts/supervise.js",
     "test": "node --test --test-concurrency=1 \"test/*.test.js\"",
     "check": "node scripts/check-syntax.js",
     "validate-config": "node scripts/validate-config.js",

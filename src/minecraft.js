@@ -310,7 +310,7 @@ function createMinecraftBot({ config, db, logger, checkMembership }) {
     await setSetting(db, 'station', station);
     runtime.stationReady = true;
     lastStationError = null;
-    // Coordinates stay out of the console: Actions logs can be public.
+    // Coordinates stay out of the console: a hosting panel console can be seen by others.
     await logger.info('station.found', `Kit chests found (${describeStation(station, settings.kits)})${result.turned ? '; the orientation was worked out from the chests' : ''}.`);
     queue.poke();
   }
