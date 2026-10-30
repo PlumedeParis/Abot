@@ -3,7 +3,15 @@
     "replyCommand": "/msg {player} {message}",
     "deliveryAnnouncement": "{player} just got a {kit} kit from VoidKits! Get yours: !kit totem / pvp / grief",
     "ignorePattern": "^\\[[^\\]]*discord[^\\]]*\\]",
-    "patterns": []
+    "patterns": [],
+    "advertisement": {
+      "message": "order a kit by typing !kit totem/pvp/grief",
+      "intervalMinutes": 30
+    },
+    "welcome": {
+      "message": "order a free kit by doing !kit totem/pvp/grief",
+      "cooldownHours": 6
+    }
   },
   "limits": {
     "cooldownMinutes": 10,
@@ -18,16 +26,44 @@
     "autoDetect": true,
     "scanDistance": 6,
     "home": null,
-    "returnCommands": ["/kill"]
+    "returnCommands": [
+      "/kill"
+    ]
   },
   "delivery": {
     "method": "teleport",
-    "commands": ["/tpa {player}"],
+    "commands": [
+      "/tpa {player}"
+    ],
     "instructions": "Your {kit} kit is ready! Accept my teleport request with /tpaccept within 60 seconds."
   },
   "kits": {
-    "totem": { "direction": "left", "items": [{ "nameRegex": "shulker_box$", "count": 1 }] },
-    "pvp": { "direction": "right", "items": [{ "nameRegex": "shulker_box$", "count": 1 }] },
-    "grief": { "direction": "forward", "items": [{ "nameRegex": "shulker_box$", "count": 1 }] }
+    "totem": {
+      "direction": "left",
+      "items": [
+        {
+          "nameRegex": "shulker_box$",
+          "count": 1
+        }
+      ]
+    },
+    "pvp": {
+      "direction": "right",
+      "items": [
+        {
+          "nameRegex": "shulker_box$",
+          "count": 1
+        }
+      ]
+    },
+    "grief": {
+      "direction": "forward",
+      "items": [
+        {
+          "nameRegex": "shulker_box$",
+          "count": 1
+        }
+      ]
+    }
   }
 }

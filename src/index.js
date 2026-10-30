@@ -6,6 +6,13 @@
 //   node src/index.js discord    only the Discord bot
 // Exit code 2 means a setup problem (configuration, token, invite): restarting will not help.
 
+// Node prints a warning the first time its built-in SQLite is used; it is
+// expected here, so only other warnings are shown.
+process.removeAllListeners('warning');
+process.on('warning', (w) => {
+  if (!(w.name === 'ExperimentalWarning' && /SQLite/i.test(w.message))) console.warn(`${w.name}: ${w.message}`);
+});
+
 const { loadDotEnv, loadConfig, loadSecrets, secretValues } = require('./config');
 const { openDatabase, setStatus } = require('./db');
 const { createLogger, createRedactor } = require('./log');

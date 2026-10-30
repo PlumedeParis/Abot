@@ -57,6 +57,7 @@ function startServer(port) {
     chats,
     system: (text) => clients.forEach((c) => system(c, text)),
     playerChat: (uuid, name, msg) => clients.forEach((c) => playerChat(c, uuid, name, msg)),
+    join: (uuid, name) => clients.forEach((c) => c.write('player_info', { action: { add_player: true, update_listed: true }, data: [{ uuid, player: { name, properties: [] }, listed: 1 }] })),
     ready: new Promise((r) => server.on('listening', r)),
     close: () => server.close()
   };
@@ -68,7 +69,7 @@ test('VoidKits logs in and answers !kit and !link in the 1b1t chat format', { ti
   await srv.ready;
   const db = await sqliteDb();
   const logger = fakeLogger();
-  const s = settings({ chat: { minDelayMs: 50, perPlayerCommandIntervalMs: 0 }, auth: { postLoginDelayMs: 50, promptTimeoutMs: 3000 } });
+  const s = settings({ chat: { minDelayMs: 50, perPlayerCommandIntervalMs: 0, welcome: { joinGraceSeconds: 0.5 } }, auth: { postLoginDelayMs: 50, promptTimeoutMs: 3000 } });
   const secrets = { minecraft: { host: '127.0.0.1', port, username: 'VoidKits', auth: 'offline', password: 'Plume2', version: '1.21.11' }, discord: {}, database: {} };
   const bot = createMinecraftBot({ config: { settings: s, secrets }, db, logger, checkMembership: member });
   const sent = (prefix) => srv.commands.some((c) => c.startsWith(prefix));
@@ -100,6 +101,17 @@ test('VoidKits logs in and answers !kit and !link in the 1b1t chat format', { ti
     // The station search waits up to 15s for chunks (this server sends none).
     assert.ok(await waitFor(() => logger.events.some((e) => e.type === 'station.missing'), 25000));
     assert.ok(logger.events.some((e) => e.type === 'chat.command' && e.message === 'Steve: !kit pvp'));
+
+    // A player joining gets a private message, but only while deliveries are
+    // possible: this test world has no kit chests, so nothing is sent.
+    await new Promise((r) => setTimeout(r, 700)); // after the start-up grace period
+    srv.join('aaaaaaaa-2222-3333-4444-555555555555', 'Newbie');
+    await new Promise((r) => setTimeout(r, 300));
+    assert.ok(!sent('msg Newbie'), 'no welcome while the kit chests are missing');
+    bot.runtime.stationReady = true;
+    srv.join('bbbbbbbb-2222-3333-4444-555555555555', 'Alex');
+    assert.ok(await waitFor(() => sent('msg Alex order a free kit by doing !kit totem/pvp/grief')), `commands: ${JSON.stringify(srv.commands)}`);
+    bot.runtime.stationReady = false;
 
     // Nobody can order for a player who is not in the tab list.
     srv.system('Ghost » !kit pvp');

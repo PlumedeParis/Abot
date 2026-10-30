@@ -68,7 +68,10 @@ function createCommandHandler({ db, getSettings, getRuntime, logger, checkMember
 
     const link = await linking.activeLinkByUsername(db, name);
     if (await bans.findBan(db, { name, discordId: link?.discord_id })) return refuse(name, kit, 'banned', 'You are banned from the kit bot.', 'warn');
-    if (!link) return refuse(name, kit, 'not linked', 'Link your account first: run /link in our Discord, then whisper me "!link <code>".');
+    if (!link) {
+      const where = s.chat.discordInvite ? `join our Discord ${s.chat.discordInvite} and run /link there` : 'run /link in our Discord';
+      return refuse(name, kit, 'not linked', `Link your account first: ${where}, then whisper me "!link <code>".`);
+    }
     if (link.mc_uuid && player.uuid && link.mc_uuid !== player.uuid) return refuse(name, kit, 'UUID does not match the linked account', 'This account does not match the linked one. Contact staff.', 'warn');
 
     const m = await checkMembership(link.discord_id);

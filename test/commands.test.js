@@ -51,7 +51,7 @@ test('an unlinked player is told how to link', async () => {
   const t = await setup();
   const r = await t.handle('Steve', '!kit pvp', steve);
   assert.equal(r.reason, 'not linked');
-  assert.match(t.replies[0], /^Steve: Link your account first/);
+  assert.equal(t.replies[0], 'Steve: Link your account first: join our Discord https://discord.gg/VTX6khDexE and run /link there, then whisper me "!link <code>".');
 });
 
 test('a linked player gets the kit queued, then cooldown and pending apply', async () => {

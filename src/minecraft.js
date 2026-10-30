@@ -15,6 +15,7 @@ const { createDelivery, numberBlockInteractions } = require('./delivery');
 const { detectStation, describeStation } = require('./station');
 const linking = require('./linking');
 const { recordStock } = require('./stock');
+const { createPromoter } = require('./promote');
 
 const MAX_CHAT = 256;
 const fill = (template, values) => String(template).replace(/\{(\w+)\}/g, (m, k) => (k in values ? values[k] : m));
@@ -125,6 +126,14 @@ function createMinecraftBot({ config, db, logger, checkMembership }) {
       if (settings.chat.deliveryAnnouncement) await send(clean(fill(settings.chat.deliveryAnnouncement, { player: req.mc_username, kit: req.kit }))).catch(() => {});
     },
     notify: (req, msg) => (onlinePlayer(req.mc_username) ? reply(req.mc_username, msg) : Promise.resolve())
+  });
+
+  const promoter = createPromoter({
+    getSettings,
+    getRuntime: () => runtime,
+    logger,
+    say: (text) => send(clean(text)).catch(() => {}),
+    whisper: (name, text) => reply(name, text)
   });
 
   const handleCommand = createCommandHandler({ db, getSettings, getRuntime: () => runtime, logger, checkMembership, reply, onQueued: () => queue.poke() });
@@ -301,7 +310,7 @@ function createMinecraftBot({ config, db, logger, checkMembership }) {
     await setSetting(db, 'station', station);
     runtime.stationReady = true;
     lastStationError = null;
-    // Coordinates stay out of the console: Actions logs can be public.
+    // Coordinates stay out of the console: a hosting panel console can be seen by others.
     await logger.info('station.found', `Kit chests found (${describeStation(station, settings.kits)})${result.turned ? '; the orientation was worked out from the chests' : ''}.`);
     queue.poke();
   }
@@ -393,11 +402,18 @@ function createMinecraftBot({ config, db, logger, checkMembership }) {
         await logger.info('minecraft.ready', runtime.stationReady ? 'Logged in. Reading the chat for !kit and ready to deliver.' : 'Logged in and reading the chat, but deliveries wait until the kit chests are found.');
         stableTimer = setTimeout(() => (reconnectAttempt = 0), 60000);
         idle(b);
+        promoter.loggedIn({ graceMs: (settings.chat.welcome.joinGraceSeconds ?? 15) * 1000 });
         queue.poke();
       } catch (e) {
         await logger.error('minecraft.login', `Login failed: ${e.message}`);
         b.quit('login failed');
       }
+    });
+
+    // Welcome message to players who join (see src/promote.js).
+    b.on('playerJoined', (p) => {
+      if (bot !== b || !p?.username) return;
+      promoter.playerJoined(p.username, { botName: b.username, pending: outbox.length }).catch(() => {});
     });
 
     b.on('death', () => {
@@ -426,6 +442,7 @@ function createMinecraftBot({ config, db, logger, checkMembership }) {
 
     b.on('end', (reason) => {
       clearTimeout(stableTimer);
+      promoter.loggedOut();
       controller.abort();
       runtime.connected = false;
       runtime.ready = false;
@@ -502,6 +519,7 @@ function createMinecraftBot({ config, db, logger, checkMembership }) {
     await refresh();
     timers.push(setInterval(() => refresh().catch((e) => logger.error('runtime.refresh', e.message)), 3000));
     timers.push(setInterval(() => heartbeat().catch(() => {}), 10000));
+    timers.push(setInterval(() => promoter.tick().catch(() => {}), 15000));
     queue.start();
     connect();
     await heartbeat();

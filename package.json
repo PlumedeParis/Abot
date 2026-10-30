@@ -4,24 +4,23 @@
   "private": true,
   "description": "VoidKits: Minecraft kit bot (Mineflayer) for 1b1t.cc with Discord account linking and admin commands (discord.js).",
   "license": "MIT",
-  "main": "src/index.js",
+  "main": "index.js",
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=22.13.0"
   },
   "scripts": {
     "start": "node src/index.js",
     "start:minecraft": "node src/index.js minecraft",
     "start:discord": "node src/index.js discord",
-    "supervise": "node scripts/supervise.js",
     "test": "node --test --test-concurrency=1 \"test/*.test.js\"",
     "check": "node scripts/check-syntax.js",
     "validate-config": "node scripts/validate-config.js",
-    "validate-config:example": "node scripts/validate-config.js config.example.json"
+    "validate-config:example": "node scripts/validate-config.js config.example.json",
+    "vendor:minecraft-data": "node scripts/vendor-minecraft-data.js"
   },
   "dependencies": {
-    "better-sqlite3": "13.0.3",
     "discord.js": "14.27.0",
-    "minecraft-data": "3.117.0",
+    "minecraft-data": "file:vendor/minecraft-data",
     "mineflayer": "4.39.0",
     "mineflayer-pathfinder": "2.4.5",
     "pg": "8.23.0",
@@ -32,5 +31,8 @@
     "@electric-sql/pglite": "0.5.8",
     "minecraft-protocol": "1.68.0",
     "prismarine-nbt": "2.8.0"
+  },
+  "overrides": {
+    "minecraft-data": "$minecraft-data"
   }
 }

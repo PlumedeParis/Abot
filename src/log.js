@@ -24,7 +24,7 @@ function createRedactor(secrets = []) {
 }
 
 // `details` (e.g. coordinates) are stored for Discord but never printed: the
-// console of a GitHub Actions run can be public.
+// console of a hosting panel can be seen by others.
 function createLogger({ db = null, secrets = [], consoleLevel = 'INFO', out = console } = {}) {
   const redact = createRedactor(secrets);
   const min = LEVELS[consoleLevel] ?? LEVELS.INFO;
