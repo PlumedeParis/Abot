@@ -132,7 +132,6 @@ function createMinecraftBot({ config, db, logger, checkMembership }) {
     getSettings,
     getRuntime: () => runtime,
     logger,
-    say: (text) => send(clean(text)).catch(() => {}),
     whisper: (name, text) => reply(name, text)
   });
 
@@ -519,7 +518,6 @@ function createMinecraftBot({ config, db, logger, checkMembership }) {
     await refresh();
     timers.push(setInterval(() => refresh().catch((e) => logger.error('runtime.refresh', e.message)), 3000));
     timers.push(setInterval(() => heartbeat().catch(() => {}), 10000));
-    timers.push(setInterval(() => promoter.tick().catch(() => {}), 15000));
     queue.start();
     connect();
     await heartbeat();
