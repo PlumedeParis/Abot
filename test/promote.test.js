@@ -7,7 +7,6 @@ const { settings, fakeLogger } = require('./helpers');
 
 function setup(runtime = {}) {
   let clock = 1_000_000;
-  const said = [];
   const whispers = [];
   const rt = { ready: true, stationReady: true, paused: false, maintenance: false, ...runtime };
   const s = settings();
@@ -15,47 +14,33 @@ function setup(runtime = {}) {
     getSettings: () => s,
     getRuntime: () => rt,
     logger: fakeLogger(),
-    say: async (t) => void said.push(t),
     whisper: async (n, t) => void whispers.push(`${n}: ${t}`),
     now: () => clock
   });
-  return { p, said, whispers, rt, s, tick: (ms) => (clock += ms) };
+  return { p, whispers, rt, s, tick: (ms) => (clock += ms) };
 }
 
 const MIN = 60000;
 
-test('the public message goes out every 30 minutes', async () => {
+test('there is no timed public message', () => {
   const t = setup();
-  t.p.loggedIn();
-  assert.equal(await t.p.tick(), false, 'not right after logging in');
-  t.tick(29 * MIN);
-  assert.equal(await t.p.tick(), false);
-  t.tick(1 * MIN);
-  assert.equal(await t.p.tick(), true);
-  assert.deepEqual(t.said, ['order a kit by typing !kit totem/pvp/grief']);
-  t.tick(10 * MIN);
-  assert.equal(await t.p.tick(), false);
-  t.tick(20 * MIN);
-  assert.equal(await t.p.tick(), true);
-  assert.equal(t.said.length, 2);
+  assert.equal(t.p.tick, undefined);
+  assert.equal(settings().chat.advertisement, undefined);
 });
 
-test('no advertising while deliveries are impossible, or when turned off', async () => {
+test('no welcome while deliveries are impossible, or when turned off', async () => {
   for (const runtime of [{ paused: true }, { maintenance: true }, { stationReady: false }, { ready: false }]) {
     const t = setup(runtime);
     t.p.loggedIn();
-    t.tick(31 * MIN);
-    assert.equal(await t.p.tick(), false, JSON.stringify(runtime));
-    assert.equal(await t.p.playerJoined('Steve'), false);
+    t.tick(MIN);
+    assert.equal(await t.p.playerJoined('Steve'), false, JSON.stringify(runtime));
   }
   const t = setup();
-  t.s.chat.advertisement.message = '';
   t.s.chat.welcome.message = '';
   t.p.loggedIn();
-  t.tick(31 * MIN);
-  assert.equal(await t.p.tick(), false);
   t.tick(MIN);
   assert.equal(await t.p.playerJoined('Steve'), false);
+  assert.deepEqual(t.whispers, []);
 });
 
 test('players who join get a private message, once every 6 hours', async () => {

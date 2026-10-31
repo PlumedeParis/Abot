@@ -4,10 +4,6 @@
     "deliveryAnnouncement": "{player} just got a {kit} kit from VoidKits! Get yours: !kit totem / pvp / grief",
     "ignorePattern": "^\\[[^\\]]*discord[^\\]]*\\]",
     "patterns": [],
-    "advertisement": {
-      "message": "order a kit by typing !kit totem/pvp/grief",
-      "intervalMinutes": 30
-    },
     "welcome": {
       "message": "order a free kit by doing !kit totem/pvp/grief",
       "cooldownHours": 6

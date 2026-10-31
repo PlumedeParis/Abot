@@ -1,14 +1,12 @@
 'use strict';
 
-// Advertising the kit bot in game:
-//   - a public chat message every chat.advertisement.intervalMinutes;
-//   - a private message to each player who joins the server.
-// Both stay quiet while deliveries are impossible (paused, maintenance,
-// kit chests not found), so the bot never promises kits it cannot give.
+// Advertising the kit bot in game: a private message to each player who
+// joins the server. It stays quiet while deliveries are impossible (paused,
+// maintenance, kit chests not found), so the bot never promises kits it
+// cannot give.
 
-function createPromoter({ getSettings, getRuntime, logger, say, whisper, now = () => Date.now() }) {
+function createPromoter({ getSettings, getRuntime, logger, whisper, now = () => Date.now() }) {
   const greeted = new Map(); // name (lower case) -> last welcome time
-  let lastAdvertAt = now();
   let greetFrom = Infinity;
 
   const canPromote = () => {
@@ -22,22 +20,10 @@ function createPromoter({ getSettings, getRuntime, logger, say, whisper, now = (
     // welcomes only start after a grace period.
     loggedIn({ graceMs = 15000 } = {}) {
       greetFrom = now() + graceMs;
-      lastAdvertAt = now();
     },
 
     loggedOut() {
       greetFrom = Infinity;
-    },
-
-    // Called regularly (every few seconds).
-    async tick() {
-      const ad = getSettings().chat.advertisement;
-      if (!ad.message || now() - lastAdvertAt < ad.intervalMinutes * 60000) return false;
-      if (!canPromote()) return false;
-      lastAdvertAt = now();
-      await say(ad.message);
-      await logger.debug('chat.advertisement', ad.message);
-      return true;
     },
 
     // pending: messages already waiting to be sent (a burst of joins is not
